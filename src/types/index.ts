@@ -62,9 +62,6 @@ export interface AppConfig {
   fontSize?: 'small' | 'medium' | 'large'
   showTimestamp?: boolean
   sendKey?: 'enter' | 'ctrlEnter'
-  // 记忆
-  memoryEnabled?: boolean
-  memoryRounds?: number
   // 快捷键
   shortcutNewChat?: string
   shortcutOpenSettings?: string

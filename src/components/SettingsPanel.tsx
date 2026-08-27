@@ -5,7 +5,6 @@ import {
   Settings,
   Bot,
   Palette,
-  Brain,
   Database,
   HardDrive,
   Keyboard,
@@ -196,7 +195,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
     { id: 'system', icon: Settings, label: t('settings.title') },
     { id: 'agent', icon: Bot, label: t('settings.agent') },
     { id: 'personalization', icon: Palette, label: t('settings.personalization') },
-    { id: 'memory', icon: Brain, label: t('settings.memory') },
     { id: 'models', icon: Database, label: t('settings.models') },
     { id: 'data', icon: HardDrive, label: t('settings.data') },
     { id: 'shortcuts', icon: Keyboard, label: t('settings.shortcuts') },
@@ -307,15 +305,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
     if (!window.confirm(t('settings.clearAllDataConfirm'))) return
     await window.electronAPI?.app.clearAllData()
     window.location.reload()
-  }
-
-  const handleClearConversations = async () => {
-    if (!window.confirm(t('settings.clearConversationsConfirm'))) return
-    const store = useAppStore.getState()
-    for (const conv of store.conversations) {
-      await store.deleteConversation(conv.id)
-    }
-    alert(t('settings.conversationsCleared'))
   }
 
   const cfg = config as Record<string, any>
@@ -591,48 +580,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                       <Monitor size={16} /><span>浅色模式</span>
                     </button>
                   </div>
-                </Card>
-              </div>
-            )}
-
-            {/* Memory Tab */}
-            {activeTab === 'memory' && (
-              <div className="max-w-2xl">
-                <SectionTitle>上下文记忆</SectionTitle>
-                <Card>
-                  <SettingRow title={t('settings.memoryEnabled')} desc={t('settings.memoryEnabledDesc')}>
-                    <Toggle
-                      checked={cfg.memoryEnabled ?? true}
-                      onChange={(v) => setConfig({ memoryEnabled: v })}
-                    />
-                  </SettingRow>
-                  {(cfg.memoryEnabled ?? true) && (
-                    <div className="py-3 border-t border-gray-100">
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="text-sm font-medium text-gray-800">{t('settings.memoryRounds')}</h4>
-                        <span className="text-xs text-primary-600 font-medium">{cfg.memoryRounds ?? 10}</span>
-                      </div>
-                      <p className="text-xs text-gray-500 mb-2">{t('settings.memoryRoundsDesc')}</p>
-                      <input
-                        type="range" min={1} max={50} step={1}
-                        value={cfg.memoryRounds ?? 10}
-                        onChange={(e) => setConfig({ memoryRounds: parseInt(e.target.value) })}
-                        className="w-full accent-primary-500"
-                      />
-                    </div>
-                  )}
-                </Card>
-
-                <SectionTitle>数据清理</SectionTitle>
-                <Card>
-                  <SettingRow title={t('settings.clearConversations')} desc="删除所有历史对话记录。">
-                    <button
-                      onClick={handleClearConversations}
-                      className="px-3 py-1.5 text-sm text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
-                    >
-                      清空
-                    </button>
-                  </SettingRow>
                 </Card>
               </div>
             )}

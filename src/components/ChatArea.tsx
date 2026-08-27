@@ -227,13 +227,17 @@ const ChatArea: React.FC = () => {
 
       abortControllerRef.current = new AbortController()
 
-      // 记忆设置：决定携带多少历史消息
-      let historyMessages = conversation.messages
-      if (!(config.memoryEnabled ?? true)) {
-        historyMessages = []
-      } else {
-        const rounds = Math.max(1, config.memoryRounds ?? 10)
-        historyMessages = conversation.messages.slice(-rounds * 2)
+      // 自动记忆：根据模型上下文窗口自动决定携带多少历史消息
+      // 预留 40% 空间给回复，其余按字符预算从最新往回装填（约3字符≈1 token）
+      const CONTEXT_WINDOW = 32768
+      const charBudget = Math.floor(CONTEXT_WINDOW * 0.6) * 3
+      const historyMessages: typeof conversation.messages = []
+      let usedChars = 0
+      for (let i = conversation.messages.length - 1; i >= 0; i--) {
+        const len = conversation.messages[i].content?.length || 0
+        if (usedChars + len > charBudget && historyMessages.length >= 2) break
+        usedChars += len
+        historyMessages.unshift(conversation.messages[i])
       }
 
       let allMessages = [...historyMessages, { ...userMessage, content: apiContent }].map((m) => ({
