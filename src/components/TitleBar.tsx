@@ -3,6 +3,7 @@ import { Minus, Square, X } from 'lucide-react'
 
 const TitleBar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false)
+  const [version, setVersion] = useState('')
 
   useEffect(() => {
     const checkMaximized = async () => {
@@ -12,6 +13,9 @@ const TitleBar: React.FC = () => {
       }
     }
     checkMaximized()
+    window.electronAPI?.app.getInfo().then((info: any) => {
+      if (info?.version) setVersion(info.version)
+    }).catch(() => {})
   }, [])
 
   const handleMinimize = () => window.electronAPI?.window.minimize()
@@ -29,7 +33,7 @@ const TitleBar: React.FC = () => {
           <span className="text-white text-xs font-bold">M</span>
         </div>
         <span className="text-sm font-medium text-gray-700">Many AI</span>
-        <span className="text-xs text-gray-400">v1.0.0</span>
+        {version && <span className="text-xs text-gray-400">v{version}</span>}
       </div>
       <div className="flex items-center gap-0.5 titlebar-button">
         <button

@@ -153,6 +153,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [capturing, setCapturing] = useState<string | null>(null)
   const [dirTree, setDirTree] = useState<any[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    window.electronAPI?.app.getInfo().then((info: any) => {
+      if (info?.version) setAppVersion(info.version)
+    }).catch(() => {})
+  }, [])
 
   // 加载目录树
   const loadDirTree = async () => {
@@ -1105,7 +1112,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                   <span className="text-white text-2xl font-bold">M</span>
                 </div>
                 <h2 className="text-xl font-bold text-gray-800 mb-1">Many AI</h2>
-                <p className="text-sm text-gray-500 mb-1">版本 1.0.0</p>
+                <p className="text-sm text-gray-500 mb-1">版本 {appVersion}</p>
                 <p className="text-xs text-gray-400 mb-4">完成于 2026年08月27日</p>
                 <p className="text-sm text-gray-600 max-w-md mx-auto mb-4">
                   多智能体桌面应用，支持多模型协作完成复杂任务。
