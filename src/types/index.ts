@@ -78,10 +78,13 @@ export interface AppConfig {
   autoBackup?: boolean
   backupMaxSize?: number
   systemTools?: 'disabled' | 'enabled'
-  builtinRuntime?: boolean
-  pythonEnabled?: boolean
-  nodejsEnabled?: boolean
-  gitBashEnabled?: boolean
+  // 沙箱细分策略
+  fileWhitelist?: string
+  fileBlacklist?: string
+  cmdAllowList?: string
+  cmdAskList?: string
+  netAllowedDomains?: string
+  netBlockedDomains?: string
 }
 
 export interface Skill {

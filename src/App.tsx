@@ -32,7 +32,6 @@ import SettingsPanel from './components/SettingsPanel'
 import CreateTaskDialog from './components/CreateTaskDialog'
 import TaskSettings from './components/TaskSettings'
 import TaskWorkspace from './components/TaskWorkspace'
-import { skillhubAllSkills } from './data/skillhub_all'
 import { useAppStore } from './stores'
 import { DirTreeItem } from './types/electron'
 
@@ -173,6 +172,40 @@ const SkillAvatar: React.FC<{ skill: any; size?: string }> = ({ skill, size = 'w
   )
 }
 
+// SkillHub 技能卡片（memo化：状态变化时只重渲染受影响的卡片）
+const SkillHubCard: React.FC<{ skill: any; isInstalled: boolean; isDown: boolean; onInstall: (slug: string) => void }> = React.memo(({ skill, isInstalled, isDown, onInstall }) => {
+  const slug = skill.slug || skill.name
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow cursor-pointer">
+      <div className="flex items-center gap-3 mb-2">
+        <SkillAvatar skill={skill} />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-gray-800 text-sm truncate">{skill.name}</div>
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); if (!isInstalled && !isDown) onInstall(slug) }}
+          className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+        >
+          {isDown ? (
+            <Loader2 size={16} className="text-primary-500 animate-spin" />
+          ) : isInstalled ? (
+            <Check size={16} className="text-primary-500" />
+          ) : (
+            <Plus size={16} className="text-gray-400" />
+          )}
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 line-clamp-2 mb-2">{skill.desc}</p>
+      {skill.downloads ? (
+        <div className="flex items-center gap-3 text-xs text-gray-400">
+          <span className="flex items-center gap-1"><Download size={10} />{(skill.downloads / 1000).toFixed(0)}k</span>
+          <span className="flex items-center gap-1"><Star size={10} />{skill.stars}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
 // 技能与连接器页面
 const ExpertsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'skillhub' | 'installed'>('skillhub')
@@ -182,8 +215,9 @@ const ExpertsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; skill: any } | null>(null)
   const [downloading, setDownloading] = useState<Set<string>>(new Set())
-  const [skillhubSkills, setSkillhubSkills] = useState<any[]>(skillhubAllSkills)
+  const [skillhubSkills, setSkillhubSkills] = useState<any[]>([])
   const [loadingMore, setLoadingMore] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -201,7 +235,6 @@ const ExpertsPage: React.FC = () => {
       if (data?.data?.skills) {
         const colors = ['bg-blue-500','bg-green-500','bg-red-500','bg-yellow-500','bg-purple-500','bg-pink-500','bg-indigo-500','bg-cyan-500','bg-orange-500','bg-teal-500','bg-rose-500','bg-violet-500','bg-emerald-500','bg-sky-500','bg-amber-500']
         const catMap: Record<string,string> = { 'office-efficiency':'办公效率','content-creation':'内容创作','dev-programming':'开发编程','data-analysis':'数据分析','design-media':'设计多媒体','ai-agent':'AI Agent','knowledge-management':'知识管理','life-service':'生活服务','business-ops':'商业运营','professional':'专业领域','education':'教育学习' }
-        const catIcon: Record<string,string> = { 'office-efficiency':'💼','content-creation':'✍️','dev-programming':'💻','data-analysis':'📊','design-media':'🎨','ai-agent':'🤖','knowledge-management':'🧠','life-service':'🏠','business-ops':'📈','professional':'👔','education':'📚' }
         const mapped = data.data.skills.map((s: any, i: number) => ({
           slug: s.slug,
           name: s.name,
@@ -223,6 +256,7 @@ const ExpertsPage: React.FC = () => {
       console.error('SkillHub fetch error:', e)
     }
     setLoadingMore(false)
+    setInitialLoading(false)
   }, [])
 
   // 首次加载 + 搜索时重新获取
@@ -280,14 +314,14 @@ const ExpertsPage: React.FC = () => {
     return () => el.removeEventListener('scroll', handleScroll)
   }, [activeTab, loadingMore, hasMore, page])
 
-  const installSkill = (slug: string) => {
+  const installSkill = useCallback((slug: string) => {
     setDownloading(prev => { const n = new Set(prev); n.add(slug); return n })
     setTimeout(() => {
       setInstalledSkills(prev => { const n = new Set(prev); n.add(slug); return n })
       setEnabledSkills(prev => { const n = new Set(prev); n.add(slug); return n })
       setDownloading(prev => { const n = new Set(prev); n.delete(slug); return n })
     }, 800)
-  }
+  }, [])
 
   const toggleEnabled = (slug: string) => {
     setEnabledSkills(prev => {
@@ -434,42 +468,31 @@ const ExpertsPage: React.FC = () => {
         {/* ====== SkillHub 列表 ====== */}
         {activeTab === 'skillhub' && (
           <>
-          <div className="grid grid-cols-4 gap-3">
-            {displaySkills.map((skill: any) => {
-              const slug = skill.slug || skill.name
-              const isInstalled = installedSkills.has(slug)
-              const isDown = downloading.has(slug)
-              return (
-                <div key={slug} className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow cursor-pointer">
-                  <div className="flex items-center gap-3 mb-2">
-                    <SkillAvatar skill={skill} />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-800 text-sm truncate">{skill.name}</div>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); if (!isInstalled && !isDown) installSkill(slug) }}
-                      className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-                    >
-                      {isDown ? (
-                        <Loader2 size={16} className="text-primary-500 animate-spin" />
-                      ) : isInstalled ? (
-                        <Check size={16} className="text-primary-500" />
-                      ) : (
-                        <Plus size={16} className="text-gray-400" />
-                      )}
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-500 line-clamp-2 mb-2">{skill.desc}</p>
-                  {skill.downloads && (
-                    <div className="flex items-center gap-3 text-xs text-gray-400">
-                      <span className="flex items-center gap-1"><Download size={10} />{(skill.downloads / 1000).toFixed(0)}k</span>
-                      <span className="flex items-center gap-1"><Star size={10} />{skill.stars}</span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+          {initialLoading && skillhubSkills.length === 0 ? (
+            <div className="flex justify-center py-16">
+              <Loader2 size={24} className="text-gray-400 animate-spin" />
+            </div>
+          ) : (
+            <>
+            <div className="grid grid-cols-4 gap-3">
+              {displaySkills.map((skill: any) => {
+                const slug = skill.slug || skill.name
+                return (
+                  <SkillHubCard
+                    key={slug}
+                    skill={skill}
+                    isInstalled={installedSkills.has(slug)}
+                    isDown={downloading.has(slug)}
+                    onInstall={installSkill}
+                  />
+                )
+              })}
+            </div>
+            {displaySkills.length === 0 && !loadingMore && (
+              <div className="text-center py-12 text-sm text-gray-400">未找到匹配的技能</div>
+            )}
+            </>
+          )}
           {/* 底部加载指示器 */}
           {activeTab === 'skillhub' && loadingMore && (
             <div className="flex justify-center py-4">

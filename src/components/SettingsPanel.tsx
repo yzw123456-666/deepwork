@@ -22,8 +22,6 @@ import {
   Terminal,
   Wifi,
   Download,
-  Play,
-  Clipboard,
   Clock,
   ChevronRight,
   HelpCircle,
@@ -154,6 +152,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [dirTree, setDirTree] = useState<any[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [appVersion, setAppVersion] = useState('')
+  const [sandboxSection, setSandboxSection] = useState<string | null>(null)
 
   useEffect(() => {
     window.electronAPI?.app.getInfo().then((info: any) => {
@@ -706,36 +705,126 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
                     {/* Sub-items */}
                     <div className="space-y-0 border-t border-gray-100">
-                      <button className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors">
-                        <div className="flex items-center gap-2">
-                          <FileText size={14} className="text-gray-500" />
-                          <div className="text-left">
-                            <div className="text-sm text-gray-700">文件安全</div>
-                            <div className="text-xs text-gray-400">为沙箱拦截后的文件路径配置白名单和黑名单</div>
+                      {/* 文件安全 */}
+                      <div className="border-b border-gray-100">
+                        <button
+                          onClick={() => setSandboxSection(sandboxSection === 'file' ? null : 'file')}
+                          className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileText size={14} className="text-gray-500" />
+                            <div className="text-left">
+                              <div className="text-sm text-gray-700">文件安全</div>
+                              <div className="text-xs text-gray-400">为沙箱拦截后的文件路径配置白名单和黑名单</div>
+                            </div>
                           </div>
-                        </div>
-                        <ChevronRight size={14} className="text-gray-400" />
-                      </button>
-                      <button className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors">
-                        <div className="flex items-center gap-2">
-                          <Terminal size={14} className="text-gray-500" />
-                          <div className="text-left">
-                            <div className="text-sm text-gray-700">命令安全</div>
-                            <div className="text-xs text-gray-400">为命令前缀配置询问和放行名单</div>
+                          <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'file' ? 'rotate-90' : ''}`} />
+                        </button>
+                        {sandboxSection === 'file' && (
+                          <div className="px-1 pb-3 space-y-2">
+                            <div>
+                              <label className="text-xs text-gray-500">白名单（每行一个路径，允许访问）</label>
+                              <textarea
+                                value={(cfg as any).fileWhitelist ?? ''}
+                                onChange={(e) => setConfig({ fileWhitelist: e.target.value })}
+                                placeholder={'如：\nC:/Users/公共/文档\nD:/共享文件'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500">黑名单（每行一个路径，禁止访问）</label>
+                              <textarea
+                                value={(cfg as any).fileBlacklist ?? ''}
+                                onChange={(e) => setConfig({ fileBlacklist: e.target.value })}
+                                placeholder={'如：\nC:/Windows\nC:/Program Files'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
                           </div>
-                        </div>
-                        <ChevronRight size={14} className="text-gray-400" />
-                      </button>
-                      <button className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors">
-                        <div className="flex items-center gap-2">
-                          <Wifi size={14} className="text-gray-500" />
-                          <div className="text-left">
-                            <div className="text-sm text-gray-700">网络安全</div>
-                            <div className="text-xs text-gray-400">控制 URL 访问与沙箱网络域名规则</div>
+                        )}
+                      </div>
+                      {/* 命令安全 */}
+                      <div className="border-b border-gray-100">
+                        <button
+                          onClick={() => setSandboxSection(sandboxSection === 'cmd' ? null : 'cmd')}
+                          className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Terminal size={14} className="text-gray-500" />
+                            <div className="text-left">
+                              <div className="text-sm text-gray-700">命令安全</div>
+                              <div className="text-xs text-gray-400">为命令前缀配置询问和放行名单</div>
+                            </div>
                           </div>
-                        </div>
-                        <ChevronRight size={14} className="text-gray-400" />
-                      </button>
+                          <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'cmd' ? 'rotate-90' : ''}`} />
+                        </button>
+                        {sandboxSection === 'cmd' && (
+                          <div className="px-1 pb-3 space-y-2">
+                            <div>
+                              <label className="text-xs text-gray-500">放行名单（每行一个前缀，直接执行不询问）</label>
+                              <textarea
+                                value={(cfg as any).cmdAllowList ?? ''}
+                                onChange={(e) => setConfig({ cmdAllowList: e.target.value })}
+                                placeholder={'如：\nls\ncat\nnode --version'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500">询问名单（每行一个前缀，执行前询问用户）</label>
+                              <textarea
+                                value={(cfg as any).cmdAskList ?? ''}
+                                onChange={(e) => setConfig({ cmdAskList: e.target.value })}
+                                placeholder={'如：\nnpm install\npip install\nrm'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {/* 网络安全 */}
+                      <div>
+                        <button
+                          onClick={() => setSandboxSection(sandboxSection === 'net' ? null : 'net')}
+                          className="w-full flex items-center justify-between py-3 hover:bg-gray-50 rounded-lg px-1 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Wifi size={14} className="text-gray-500" />
+                            <div className="text-left">
+                              <div className="text-sm text-gray-700">网络安全</div>
+                              <div className="text-xs text-gray-400">控制 URL 访问与沙箱网络域名规则</div>
+                            </div>
+                          </div>
+                          <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'net' ? 'rotate-90' : ''}`} />
+                        </button>
+                        {sandboxSection === 'net' && (
+                          <div className="px-1 pb-3 space-y-2">
+                            <div>
+                              <label className="text-xs text-gray-500">允许的域名（每行一个，如 api.example.com）</label>
+                              <textarea
+                                value={(cfg as any).netAllowedDomains ?? ''}
+                                onChange={(e) => setConfig({ netAllowedDomains: e.target.value })}
+                                placeholder={'如：\napi.deepseek.com\napi.skillhub.cn'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-gray-500">禁止的域名（每行一个）</label>
+                              <textarea
+                                value={(cfg as any).netBlockedDomains ?? ''}
+                                onChange={(e) => setConfig({ netBlockedDomains: e.target.value })}
+                                placeholder={'如：\nexample.com\ntracker.example.net'}
+                                rows={3}
+                                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 font-mono"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -849,122 +938,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                       <option value="enabled">启用</option>
                     </select>
                   </div>
-                </div>
-
-                {/* Built-in Runtime */}
-                <div className="bg-white border border-gray-200 rounded-xl p-4 overflow-hidden">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <Play size={18} className="text-blue-500" />
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-800">内置运行时</h3>
-                        <p className="text-xs text-gray-500">允许使用随包提供的 Node.js、Python 和 Git Bash 工具</p>
-                      </div>
-                    </div>
-                    <Toggle
-                      checked={(cfg as any).builtinRuntime ?? true}
-                      onChange={(v) => setConfig({ builtinRuntime: v })}
-                    />
-                  </div>
-
-                  {/* Tool list table */}
-                  <div className="mt-3 border-t border-gray-100 pt-3">
-                    <div className="grid grid-cols-3 text-xs text-gray-500 mb-2 px-2">
-                      <span>工具</span>
-                      <span>说明</span>
-                      <span className="text-right">状态</span>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="grid grid-cols-3 items-center py-2 px-2 rounded-lg hover:bg-gray-50">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">🐍</span>
-                          <span className="text-sm text-gray-700">Python</span>
-                        </div>
-                        <span className="text-xs text-gray-500">通用编程语言，适用于脚本编写、自动化和数据处理</span>
-                        <div className="flex justify-end">
-                          <Toggle
-                            checked={(cfg as any).pythonEnabled ?? true}
-                            onChange={(v) => setConfig({ pythonEnabled: v })}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 items-center py-2 px-2 rounded-lg hover:bg-gray-50">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">🟢</span>
-                          <span className="text-sm text-gray-700">Node.js</span>
-                        </div>
-                        <span className="text-xs text-gray-500">基于 Chrome V8 引擎的 JavaScript 运行时，用于服务端开发</span>
-                        <div className="flex justify-end">
-                          <Toggle
-                            checked={(cfg as any).nodejsEnabled ?? true}
-                            onChange={(v) => setConfig({ nodejsEnabled: v })}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 items-center py-2 px-2 rounded-lg hover:bg-gray-50">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">🐧</span>
-                          <span className="text-sm text-gray-700">Git Bash</span>
-                        </div>
-                        <span className="text-xs text-gray-500">在 Windows 上提供 Git 和 Bash Shell 的类 Unix 命令行环境</span>
-                        <div className="flex justify-end">
-                          <Toggle
-                            checked={(cfg as any).gitBashEnabled ?? true}
-                            onChange={(v) => setConfig({ gitBashEnabled: v })}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Audit Center */}
-                <div className="bg-white border border-gray-200 rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Clipboard size={18} className="text-yellow-500" />
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-800">审计中心</h3>
-                        <p className="text-xs text-gray-500">拦截/放行记录与日志导出</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button className="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                        导出日志
-                      </button>
-                      <button className="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                        清空记录
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Audit log entries */}
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    <div className="text-xs text-gray-400 flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                      <div>
-                        <span className="font-medium text-gray-600">[命令安全]</span>{' '}
-                        用户已拒绝敏感命令：cd &quot;/d/程序/java程序/化学模组&quot; &amp;&amp; cp -f realchem-source/build/libs/realchem-1.0.15.jar worldgen-test/mods/realchem-1.0.15.jar
-                      </div>
-                      <span className="flex-shrink-0 ml-3 text-gray-400">2026/8/24 14:07:06</span>
-                    </div>
-                    <div className="text-xs text-gray-400 flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                      <div>
-                        <span className="font-medium text-gray-600">[拒绝记录]</span>{' '}
-                        命令已被用户拒绝：cd &quot;/d/程序/java程序/化学模组&quot; &amp;&amp; cp -f realchem-source/build/libs/realchem-1.0.15.jar
-                      </div>
-                      <span className="flex-shrink-0 ml-3 text-gray-400">2026/8/24 14:07:06</span>
-                    </div>
-                    <div className="text-xs text-gray-400 flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                      <div>
-                        <span className="font-medium text-gray-600">[命令安全]</span>{' '}
-                        沙箱内执行命令：cd &quot;/d/程序/java程序/化学模组&quot; &amp;&amp; ls -la realchem-source/build/libs/
-                      </div>
-                      <span className="flex-shrink-0 ml-3 text-gray-400">2026/8/24 13:36:39</span>
-                    </div>
-                  </div>
-                  <button className="w-full text-center text-xs text-gray-400 hover:text-gray-600 mt-2 py-1 transition-colors">
-                    查看全部（还有 1208 条）
-                  </button>
                 </div>
               </div>
             )}
