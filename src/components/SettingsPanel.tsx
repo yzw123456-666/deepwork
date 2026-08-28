@@ -422,6 +422,25 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                     })
                   )}
                 </div>
+
+                {/* 单模型任务备用模型 */}
+                <div className="mt-4 bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-800">单模型任务备用模型</h4>
+                    <p className="text-xs text-gray-500 mt-0.5">单模型任务执行失败时，自动换用备用模型重试</p>
+                  </div>
+                  <select
+                    value={(cfg as any).fallbackModelId ?? ''}
+                    onChange={(e) => setConfig({ fallbackModelId: e.target.value })}
+                    className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 bg-white max-w-[200px]"
+                  >
+                    <option value="">不启用</option>
+                    <option value="auto">自动选择</option>
+                    {models.filter(m => m.enabled).map(m => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
 

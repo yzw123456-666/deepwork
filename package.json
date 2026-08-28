@@ -1,6 +1,6 @@
 {
   "name": "many-ai",
-  "version": "26.8.28.1021",
+  "version": "26.8.28.1038",
   "description": "Many AI - 智能助手桌面应用",
   "main": "dist-electron/main.js",
   "author": "Many AI Team",

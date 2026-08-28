@@ -407,7 +407,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
 
     try {
       if (!task.multiAIMode || task.mainModels.length === 0) {
-        // 单AI模式：Agent Loop
+        // 单AI模式：Agent Loop（失败时按设置换备用模型重试）
         const model = getModel(task.mainModels[0]) || models[0]
         if (!model) throw new Error('没有可用模型，请先在设置中添加模型')
 
@@ -415,39 +415,86 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
         // Prepare task history for single-agent mode - pass all messages, formatter will clean up
         const taskHistory = task.messages.map(m => ({ role: m.role, content: m.content }));
 
-        const result = await runAgentLoop(
-          model,
-          task.folderPath,
-          userRequest,
-          `你是一个AI任务执行助手「${model.name}」。你的擅长领域：${getCapabilityDesc(model.id)}。工作目录：${task.folderPath}\n\n你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。调用技能时使用 use_skill 工具，参数为 skill_name 和 description。请分析用户需求，合理使用工具，确保任务完成。任务完成时输出 DONE: 总结结果。`,
-          allowExec,
-          {
-            onStatus: (c) => updateStatusMsg(c),
-            onToolUse: async (tool, args, result) => {
-              await closeStatusMsg()
-              let summary = `${result.ok ? '✅' : '❌'} ${tool}`
-              if (tool === 'use_skill') {
-                summary = `${result.ok ? '⚡' : '❌'} 调用技能「${args.skill_name || ''}」${args.description ? ': ' + args.description : ''}`
-              } else if (args.path) {
-                summary += ` (${args.path})`
-              } else if (args.command) {
-                summary += ` (${args.command})`
-              }
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'system',
-                content: summary,
-                timestamp: Date.now(),
-                status: result.ok ? 'completed' : 'failed',
-              })
-            },
-            onContextUsage: (used, max) => setContextUsage({ used, max }),
-            onModelContextUsage: (modelId, used, max) => setModelContextUsage(modelId, used, max),
-            onThinking: collectThinking,
+        const singleCallbacks = {
+          onStatus: (c: string) => updateStatusMsg(c),
+          onToolUse: async (tool: string, args: Record<string, any>, result: { ok: boolean }) => {
+            await closeStatusMsg()
+            let summary = `${result.ok ? '✅' : '❌'} ${tool}`
+            if (tool === 'use_skill') {
+              summary = `${result.ok ? '⚡' : '❌'} 调用技能「${args.skill_name || ''}」${args.description ? ': ' + args.description : ''}`
+            } else if (args.path) {
+              summary += ` (${args.path})`
+            } else if (args.command) {
+              summary += ` (${args.command})`
+            }
+            await addTaskMessage(task.id, {
+              id: uuidv4(),
+              role: 'system',
+              content: summary,
+              timestamp: Date.now(),
+              status: result.ok ? 'completed' : 'failed',
+            })
           },
-          taskHistory,
-          signal
-        )
+          onContextUsage: (used: number, max: number) => setContextUsage({ used, max }),
+          onModelContextUsage: (modelId: string, used: number, max: number) => setModelContextUsage(modelId, used, max),
+          onThinking: collectThinking,
+        }
+
+        // 选备用模型：指定id → 用它；auto → 选其他启用模型中成功率最高的
+        const pickFallback = (failedModel: typeof model) => {
+          const fbId = (config as any).fallbackModelId
+          if (!fbId) return null
+          let fallback: typeof model | undefined
+          if (fbId === 'auto') {
+            const candidates = models.filter(m => m.enabled && m.id !== failedModel.id)
+            fallback = candidates.sort((a, b) => {
+              const ra = aiCapabilities.find(c => c.modelId === a.id)?.successRate ?? 100
+              const rb = aiCapabilities.find(c => c.modelId === b.id)?.successRate ?? 100
+              return rb - ra
+            })[0]
+          } else if (fbId !== failedModel.id) {
+            const fb = getModel(fbId)
+            if (fb?.enabled) fallback = fb
+          }
+          return fallback && fallback.id !== failedModel.id ? fallback : null
+        }
+
+        let result: string
+        try {
+          result = await runAgentLoop(
+            model,
+            task.folderPath,
+            userRequest,
+            `你是一个AI任务执行助手「${model.name}」。你的擅长领域：${getCapabilityDesc(model.id)}。工作目录：${task.folderPath}\n\n你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。调用技能时使用 use_skill 工具，参数为 skill_name 和 description。请分析用户需求，合理使用工具，确保任务完成。任务完成时输出 DONE: 总结结果。`,
+            allowExec,
+            singleCallbacks,
+            taskHistory,
+            signal
+          )
+        } catch (err: any) {
+          // 失败变通：换备用模型重试一次
+          const fallback = pickFallback(model)
+          if (!fallback || signal?.aborted) throw err
+          await closeStatusMsg()
+          resetThinking()
+          await addTaskMessage(task.id, {
+            id: uuidv4(),
+            role: 'system',
+            content: `🔄 ${model.name} 执行失败（${err.message?.slice(0, 120)}），变通改由备用模型 ${fallback.name} 重试`,
+            timestamp: Date.now(),
+            status: 'running',
+          })
+          result = await runAgentLoop(
+            fallback,
+            task.folderPath,
+            userRequest,
+            `你是一个AI任务执行助手「${fallback.name}」。你的擅长领域：${getCapabilityDesc(fallback.id)}。工作目录：${task.folderPath}\n\n注意：前一个模型执行此任务失败了，请避免同样的错误。你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。任务完成时输出 DONE: 总结结果。`,
+            allowExec,
+            singleCallbacks,
+            taskHistory,
+            signal
+          )
+        }
         await closeStatusMsg()
         await addTaskMessage(task.id, {
           id: uuidv4(),

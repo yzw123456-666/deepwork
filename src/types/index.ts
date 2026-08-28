@@ -75,6 +75,8 @@ export interface AppConfig {
   autoBackup?: boolean
   backupMaxSize?: number
   systemTools?: 'disabled' | 'enabled'
+  // 单模型任务备用模型：''=不启用 'auto'=自动选择 其他=指定模型id
+  fallbackModelId?: string
   // 沙箱细分策略
   fileWhitelist?: string
   fileBlacklist?: string
