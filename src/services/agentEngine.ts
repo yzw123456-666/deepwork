@@ -13,7 +13,7 @@ export interface ToolResult {
   output: string
 }
 
-const MAX_ITERATIONS = 15
+const MAX_ITERATIONS = 50
 
 // Hermes / Claude Code 风格工具协议：结构化、带示例、强调工具强制调用与代码必须落盘
 const TOOLS_PROMPT = `你可以使用以下工具完成任务。每次回复只能做一件事：调用一个工具，或宣布完成。
@@ -143,7 +143,7 @@ export async function callModel(
       messages,
       stream: true,
       temperature,
-      max_tokens: 4096,
+      max_tokens: model.contextWindow || 32768,
     }),
     signal,
   })
@@ -487,13 +487,14 @@ export async function runAgentLoop(
     if (signal?.aborted) throw new DOMException('已打断', 'AbortError')
 
     // 上报上下文用量
+    const contextWindow = model.contextWindow || DEFAULT_CONTEXT_WINDOW
     const usedNow = estimateTokens(messages)
-    try { callbacks.onContextUsage?.(usedNow, DEFAULT_CONTEXT_WINDOW) } catch {}
-    try { callbacks.onModelContextUsage?.(model.id, usedNow, DEFAULT_CONTEXT_WINDOW) } catch {}
+    try { callbacks.onContextUsage?.(usedNow, contextWindow) } catch {}
+    try { callbacks.onModelContextUsage?.(model.id, usedNow, contextWindow) } catch {}
 
     // 上下文达到阈值：自动压缩历史（LLM 摘要），防止溢出
     // 防抖动：距上次压缩至少新增 4 条消息才允许再次压缩
-    if (usedNow >= DEFAULT_CONTEXT_WINDOW * COMPACT_THRESHOLD && messages.length > 6 && messages.length - lastCompactLen >= 4) {
+    if (usedNow >= contextWindow * COMPACT_THRESHOLD && messages.length > 6 && messages.length - lastCompactLen >= 4) {
       lastCompactLen = messages.length
       try {
         await callbacks.onStatus(`📦 ${model.name} 上下文已达 ${Math.round(COMPACT_THRESHOLD * 100)}%，自动压缩历史...`)
@@ -501,8 +502,8 @@ export async function runAgentLoop(
       const compacted = await compactContext(model, messages, signal)
       messages.length = 0
       messages.push(...compacted)
-      try { callbacks.onContextUsage?.(estimateTokens(messages), DEFAULT_CONTEXT_WINDOW) } catch {}
-      try { callbacks.onModelContextUsage?.(model.id, estimateTokens(messages), DEFAULT_CONTEXT_WINDOW) } catch {}
+      try { callbacks.onContextUsage?.(estimateTokens(messages), contextWindow) } catch {}
+      try { callbacks.onModelContextUsage?.(model.id, estimateTokens(messages), contextWindow) } catch {}
     }
 
     const response = await callModel(model, messages, 0.4, signal, callbacks.onThinking)
