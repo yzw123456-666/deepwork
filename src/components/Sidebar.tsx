@@ -203,11 +203,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                {task.multiAIMode ? (
-                  <Bot size={14} className="flex-shrink-0" />
-                ) : (
-                  <FolderOpen size={14} className="flex-shrink-0" />
-                )}
+                <FolderOpen size={14} className="flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm truncate">{task.name}</div>
                   <div className="flex items-center gap-1.5">

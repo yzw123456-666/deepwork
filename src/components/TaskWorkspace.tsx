@@ -37,7 +37,7 @@ import { v4 as uuidv4 } from 'uuid'
 import TaskSettings from './TaskSettings'
 import TaskChecklist from './TaskChecklist'
 import ContextRing from './ContextRing'
-import { orchestrate, callModel, Assignment, OrchestrationResult } from '../services/agentEngine'
+import { callModel } from '../services/agentEngine'
 
 // 从内容中解析思考过程
 function parseThinkingContent(content: string): { thinking: string; mainContent: string } {
@@ -304,10 +304,9 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
   const allowExec = (config as any).systemTools === 'enabled'
   const getModel = (id: string) => models.find(m => m.id === id)
   const mainModels = currentTask.mainModels.map(getModel).filter(Boolean) as NonNullable<ReturnType<typeof getModel>>[]
-  const subModels = currentTask.subModels.map(getModel).filter(Boolean) as NonNullable<ReturnType<typeof getModel>>[]
 
   // AI 提问弹窗：最后一条 AI 消息含选项且未回答时弹出
-  const lastAiMsg = [...currentTask.messages].reverse().find(m => m.role === 'main' || m.role === 'sub')
+  const lastAiMsg = [...currentTask.messages].reverse().find(m => m.role === 'main')
   let activeQuestion: ParsedOptions | null = null
   let activeQuestionMsgId = ''
   if (lastAiMsg) {
@@ -406,12 +405,11 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
     resetThinking()
 
     try {
-      if (!task.multiAIMode || task.mainModels.length === 0) {
-        // 单AI模式：Agent Loop（失败时自动切换备用模型）
+      // Agent Loop（失败时自动切换备用模型）
 
-        const { runAgentLoop } = await import('../services/agentEngine')
-        // Prepare task history for single-agent mode - pass all messages, formatter will clean up
-        const taskHistory = task.messages.map(m => ({ role: m.role, content: m.content }));
+      const { runAgentLoop } = await import('../services/agentEngine')
+      // Prepare task history - pass all messages, formatter will clean up
+      const taskHistory = task.messages.map(m => ({ role: m.role, content: m.content }));
 
         const singleCallbacks = {
           onStatus: (c: string) => updateStatusMsg(c),
@@ -508,194 +506,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
           status: 'completed',
         })
         await updateTask(task.id, { status: 'completed' })
-        window.electronAPI?.app.notify('任务完成', `单AI任务「${task.name}」已成功完成`)
-      } else {
-        // 多AI合作模式
-        const mainModel = getModel(task.mainModels[0])
-        if (!mainModel) throw new Error('未选择主模型')
-
-        const subModelListDesc = subModels
-          .map(m => {
-            const cap = aiCapabilities.find(c => c.modelId === m.id)
-            const sizeInfo = m.parameterSize ? ` (${m.parameterSize})` : ''
-            const scoreInfo = cap ? ` [综合:${cap.compositeScore}/10 评分:${cap.rating}/10 成功率:${cap.successRate}% 任务数:${cap.taskCount}]` : ''
-            return `- ${m.name}${sizeInfo}: 擅长 ${getCapabilityDesc(m.id)}${scoreInfo}`
-          })
-          .join('\n')
-
-        // 记录各模型执行情况用于能力评估
-        const subStartTimes = new Map<string, number>()
-
-        // Prepare task history for context - pass all messages, formatHistoryForModel will clean up
-        const taskHistory = task.messages.map(m => ({ role: m.role, content: m.content }));
-
-        const result: OrchestrationResult = await orchestrate(
-          mainModel,
-          subModels,
-          task.folderPath,
-          userRequest,
-          subModelListDesc,
-          allowExec,
-          aiCapabilities.map(c => ({
-            modelId: c.modelId,
-            taskCount: c.taskCount,
-            successRate: c.successRate,
-            failureCount: c.failureCount || 0,
-          })),
-          getCapabilityDesc,
-          {
-            onStatus: (c: string) => updateStatusMsg(c),
-            onThinking: collectThinking,
-            onPlan: async (assignments: Assignment[]) => {
-              await closeStatusMsg()
-              const planText = assignments
-                .map(a => `📋 ${a.modelId}: ${a.taskDesc}`)
-                .join('\n')
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'main',
-                content: withThinking(`任务分配（并行执行）：\n${planText}`),
-                modelId: mainModel.id,
-                timestamp: Date.now(),
-                status: 'completed',
-              })
-              // 创建子任务清单
-              const subtasks: SubTask[] = assignments.map(a => ({
-                id: uuidv4(),
-                text: `[${a.modelId}] ${a.taskDesc}`,
-                completed: false,
-              }))
-              await setSubtasks(task.id, subtasks)
-              resetThinking()
-            },
-            onSubStart: async (assignment: Assignment) => {
-              await closeStatusMsg()
-              resetThinking()
-              subStartTimes.set(assignment.taskDesc, Date.now())
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'sub',
-                content: `⚙️ ${assignment.modelId} 开始执行：${assignment.taskDesc}`,
-                modelId: subModels.find(m => m.name === assignment.modelId)?.id,
-                timestamp: Date.now(),
-                status: 'running',
-              })
-            },
-            onSubDone: async (assignment: Assignment, result: string) => {
-              const modelId = subModels.find(m => m.name === assignment.modelId)?.id
-              const dur = Date.now() - (subStartTimes.get(assignment.taskDesc) || Date.now())
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'sub',
-                content: withThinking(`✅ ${assignment.modelId} 完成（${(dur / 1000).toFixed(1)}s）：${assignment.taskDesc}\n\n${result.slice(0, 500)}`),
-                modelId,
-                timestamp: Date.now(),
-                status: 'completed',
-              })
-              resetThinking()
-              // 标记子任务完成
-              const currentSubtasks = useAppStore.getState().tasks.find(t => t.id === task.id)?.subtasks || []
-              const matchSubtask = currentSubtasks.find(s => !s.completed && s.text.includes(assignment.modelId) && s.text.includes(assignment.taskDesc))
-              if (matchSubtask) {
-                await toggleSubtask(task.id, matchSubtask.id)
-              }
-              // 能力评估：成功（清零连续失败）
-              if (modelId) {
-                const cap = aiCapabilities.find(c => c.modelId === modelId)
-                updateAICapability(modelId, {
-                  taskCount: (cap?.taskCount || 0) + 1,
-                  successRate: cap ? Math.round((cap.successRate * cap.taskCount + 100) / (cap.taskCount + 1)) : 100,
-                  failureCount: 0,
-                  lastError: undefined,
-                })
-              }
-            },
-            onSubFail: async (assignment: Assignment, error: string) => {
-              const modelId = subModels.find(m => m.name === assignment.modelId)?.id
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'sub',
-                content: `❌ ${assignment.modelId} 失败：${assignment.taskDesc}\n原因：${error}`,
-                modelId,
-                timestamp: Date.now(),
-                status: 'failed',
-              })
-              // 能力评估：失败（累计失败，用于重复失败检测）
-              if (modelId) {
-                const cap = aiCapabilities.find(c => c.modelId === modelId)
-                updateAICapability(modelId, {
-                  taskCount: (cap?.taskCount || 0) + 1,
-                  successRate: cap ? Math.round((cap.successRate * cap.taskCount) / (cap.taskCount + 1)) : 0,
-                  failureCount: (cap?.failureCount || 0) + 1,
-                  lastError: error.slice(0, 200),
-                })
-              }
-            },
-            onSubRetry: async (failed: Assignment, retryModelName: string) => {
-              await closeStatusMsg()
-              resetThinking()
-              await addTaskMessage(task.id, {
-                id: uuidv4(),
-                role: 'system',
-                content: `🔄 ${failed.modelId} 执行失败，变通改由 ${retryModelName} 重试：${failed.taskDesc}`,
-                timestamp: Date.now(),
-                status: 'running',
-              })
-            },
-            onMainTakeover: async (assignment: Assignment) => {
-              await updateStatusMsg(`🫡 ${mainModel.name} 正在接管失败的任务：${assignment.taskDesc}`)
-              resetThinking()
-            },
-            onContextUsage: (used: number, max: number) => setContextUsage({ used, max }),
-            onModelContextUsage: (modelId: string, used: number, max: number) => setModelContextUsage(modelId, used, max),
-          },
-          taskHistory,
-          signal,
-        )
-
-        await closeStatusMsg()
-        await addTaskMessage(task.id, {
-          id: uuidv4(),
-          role: 'main',
-          content: withThinking(result.finalAnswer),
-          modelId: mainModel.id,
-          timestamp: Date.now(),
-          status: 'completed',
-        })
-        await updateTask(task.id, { status: result.success ? 'completed' : 'failed' })
-        window.electronAPI?.app.notify(
-          result.success ? '任务完成' : '任务失败',
-          `多AI合作任务「${task.name}」${result.success ? '已成功完成' : '执行失败'}`
-        )
-        // 任务成功时自动创建长期记忆
-        if (result.success) {
-          const { addMemory } = useAppStore.getState()
-          // 提取关键文件（从工具消息中解析）
-          const toolFiles = new Set<string>()
-          task.messages.forEach(m => {
-            if (m.role === 'system' && (m.content.includes('write_file') || m.content.includes('edit_file') || m.content.includes('创建') || m.content.includes('修改'))) {
-              const matches = m.content.match(/(?:\(|：\s*)([a-zA-Z0-9_\-./]+\.(?:html|js|ts|jsx|tsx|css|json|py|md|txt))(?:\)|,|。|;|\s)/g)
-              if (matches) matches.forEach(m => toolFiles.add(m.replace(/[()，。;,\s]/g, '')))
-            }
-          })
-          // 从结果中提取关键词
-          const keywords = [...new Set([
-            ...result.finalAnswer.toLowerCase().match(/[\u4e00-\u9fa5]{2,}/g) || [],
-            ...task.name.toLowerCase().match(/[\u4e00-\u9fa5]{2,}/g) || [],
-            ...subModels.map(m => m.name.toLowerCase())
-          ].slice(0, 10))]
-          await addMemory({
-            id: uuidv4(),
-            timestamp: Date.now(),
-            taskId: task.id,
-            taskName: task.name,
-            summary: result.finalAnswer.slice(0, 500),
-            keywords,
-            files: Array.from(toolFiles),
-            outcome: 'success',
-          })
-        }
-      }
+        window.electronAPI?.app.notify('任务完成', `任务「${task.name}」已成功完成`)
     } catch (err: any) {
       await closeStatusMsg()
       const isAborted = err?.name === 'AbortError' || String(err?.message).includes('打断') || String(err?.message).includes('abort')
@@ -853,7 +664,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
     const isCopied = copiedMsgId === msg.id
     // 判断是否为当前正在生成的最后一条消息
     const isLastMessage = msg.id === currentTask.messages[currentTask.messages.length - 1]?.id
-    const isGeneratingThis = isRunning && isLastMessage && (msg.role === 'main' || msg.role === 'sub')
+    const isGeneratingThis = isRunning && isLastMessage && msg.role === 'main'
     // 计算该消息的执行时长（距上一条用户消息）
     const msgIndex = currentTask.messages.findIndex(m => m.id === msg.id)
     let lastUserTs = 0
@@ -1050,9 +861,6 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-semibold text-gray-800">{currentTask.name}</h2>
-              {currentTask.multiAIMode && (
-                <span className="px-2 py-0.5 bg-primary-100 text-primary-600 text-xs rounded-full">多AI合作</span>
-              )}
             </div>
             <div className="text-xs text-gray-500 flex items-center gap-1">
               <FolderOpen size={10} />
@@ -1069,34 +877,10 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
         </button>
       </div>
 
-      {/* Team Info */}
-      {currentTask.multiAIMode && (
-        <div className="bg-white border-b border-gray-100 px-6 py-2 flex items-center gap-4 text-xs flex-shrink-0 flex-wrap">
-          <span className="text-gray-400">团队：</span>
-          {mainModels.map(m => (
-            <span key={m!.id} className="flex items-center gap-1 text-primary-600">
-              <Bot size={12} />
-              {m!.name} (主)
-            </span>
-          ))}
-          {subModels.map(m => (
-            <span key={m!.id} className="flex items-center gap-1 text-green-600">
-              <Zap size={12} />
-              {m!.name}
-            </span>
-          ))}
-          {!allowExec && (
-            <span className="text-amber-500 ml-auto">⚠ 命令执行已禁用（安全中心可开启）</span>
-          )}
-          {/* 执行计时 */}
-          <span className="ml-auto flex items-center gap-3">
-            {isRunning && (
-              <span className="text-xs text-gray-400 flex items-center gap-1">
-                <Loader2 size={10} className="animate-spin" />
-                {formatDuration(elapsed)}
-              </span>
-            )}
-          </span>
+      {/* Security Warning & Timer */}
+      {!allowExec && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-600 flex-shrink-0">
+          ⚠ 命令执行已禁用（安全中心可开启）
         </div>
       )}
 
@@ -1146,14 +930,14 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
                   handleSend()
                 }
               }}
-              placeholder={currentTask.multiAIMode ? '描述任务，主模型将自动分工给团队并行执行...' : '描述你的任务...'}
+              placeholder="描述你的任务..."
               className="w-full resize-none bg-transparent border-0 focus:ring-0 text-gray-700 placeholder-gray-400 text-sm"
               rows={2}
               disabled={isRunning}
             />
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-200">
               <span className="text-xs text-gray-400 flex items-center gap-2">
-                {currentTask.multiAIMode ? `主模型: ${mainModels[0]?.name || '未选择'} · 附属: ${subModels.length}个` : '单AI Agent 模式'}
+                {currentTask.mainModels.length > 0 ? `模型: ${mainModels[0]?.name || '未选择'}` : '单AI Agent 模式'}
                 {contextUsage && <ContextRing used={contextUsage.used} max={contextUsage.max} size={18} />}
               </span>
               <div className="flex items-center gap-2">

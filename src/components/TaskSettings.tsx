@@ -21,8 +21,7 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   const { models, updateTask, deleteTask, setCurrentTask, updateAICapability, aiCapabilities } = useAppStore()
 
   const [taskName, setTaskName] = useState(task.name)
-  const [selectedMainModels, setSelectedMainModels] = useState<string[]>(task.mainModels)
-  const [selectedSubModels, setSelectedSubModels] = useState<string[]>(task.subModels)
+  const [selectedModels, setSelectedModels] = useState<string[]>(task.mainModels)
   const [capabilities, setCapabilities] = useState<Record<string, string>>({})
 
   const enabledModels = models.filter(m => m.enabled)
@@ -37,16 +36,8 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
     setCapabilities(caps)
   }, [])
 
-  const toggleMainModel = (modelId: string) => {
-    setSelectedMainModels(prev => {
-      if (prev.includes(modelId)) return prev.filter(id => id !== modelId)
-      if (task.multiAIMode && prev.length >= 2) return prev
-      return [...prev, modelId]
-    })
-  }
-
-  const toggleSubModel = (modelId: string) => {
-    setSelectedSubModels(prev => {
+  const toggleModel = (modelId: string) => {
+    setSelectedModels(prev => {
       if (prev.includes(modelId)) return prev.filter(id => id !== modelId)
       return [...prev, modelId]
     })
@@ -55,8 +46,7 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   const handleSave = async () => {
     await updateTask(task.id, {
       name: taskName,
-      mainModels: selectedMainModels,
-      subModels: selectedSubModels,
+      mainModels: selectedModels,
     })
 
     // Save capabilities
@@ -109,129 +99,60 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
             </div>
           </div>
 
-          {/* Main Models */}
-          {task.multiAIMode && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                <Bot size={14} className="inline mr-1" />
-                主模型（最多2个）
-              </label>
-              <div className="space-y-2">
-                {enabledModels.map((model) => (
+          {/* 执行模型 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              <Bot size={14} className="inline mr-1" />
+              执行模型（第一个为主，其余为备用，失败自动切换）
+            </label>
+            <div className="space-y-2">
+              {enabledModels.map((model) => {
+                const selected = selectedModels.includes(model.id)
+                const order = selectedModels.indexOf(model.id)
+                return (
                   <div
                     key={model.id}
-                    onClick={() => toggleMainModel(model.id)}
+                    onClick={() => toggleModel(model.id)}
                     className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
-                      selectedMainModels.includes(model.id)
+                      selected
                         ? 'bg-primary-50 border-2 border-primary-500'
                         : 'bg-white border-2 border-gray-200 hover:border-gray-300'
                     }`}
                   >
                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${
-                      selectedMainModels.includes(model.id) ? 'bg-primary-500' : 'bg-gray-400'
+                      selected ? 'bg-primary-500' : 'bg-gray-400'
                     }`}>
                       {model.name.charAt(0)}
                     </div>
                     <div className="flex-1">
-                      <div className="font-medium text-gray-800 text-sm">{model.name}</div>
+                      <div className="font-medium text-gray-800 text-sm flex items-center gap-2">
+                        {model.name}
+                        {model.parameterSize && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded-full">{model.parameterSize}</span>
+                        )}
+                        {selected && order === 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主用</span>
+                        )}
+                        {selected && order > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-600 rounded-full">备用{order}</span>
+                        )}
+                      </div>
                     </div>
-                    {selectedMainModels.includes(model.id) && (
+                    {selected && (
                       <Check size={16} className="text-primary-500" />
                     )}
                   </div>
-                ))}
-              </div>
+                )
+              })}
             </div>
-          )}
-
-          {/* 执行模型（单模型任务） */}
-          {!task.multiAIMode && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                <Bot size={14} className="inline mr-1" />
-                执行模型（第一个为主，其余为备用，失败自动切换）
-              </label>
-              <div className="space-y-2">
-                {enabledModels.map((model, idx) => {
-                  const selected = selectedMainModels.includes(model.id)
-                  const order = selectedMainModels.indexOf(model.id)
-                  return (
-                    <div
-                      key={model.id}
-                      onClick={() => toggleMainModel(model.id)}
-                      className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
-                        selected
-                          ? 'bg-primary-50 border-2 border-primary-500'
-                          : 'bg-white border-2 border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${
-                        selected ? 'bg-primary-500' : 'bg-gray-400'
-                      }`}>
-                        {model.name.charAt(0)}
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-800 text-sm flex items-center gap-2">
-                          {model.name}
-                          {selected && order === 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主用</span>
-                          )}
-                          {selected && order > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-600 rounded-full">备用{order}</span>
-                          )}
-                        </div>
-                      </div>
-                      {selected && (
-                        <Check size={16} className="text-primary-500" />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Sub Models */}
-          {task.multiAIMode && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                <Zap size={14} className="inline mr-1" />
-                附属模型
-              </label>
-              <div className="space-y-2">
-                {enabledModels.filter(m => !selectedMainModels.includes(m.id)).map((model) => (
-                  <div
-                    key={model.id}
-                    onClick={() => toggleSubModel(model.id)}
-                    className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
-                      selectedSubModels.includes(model.id)
-                        ? 'bg-green-50 border-2 border-green-500'
-                        : 'bg-white border-2 border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${
-                      selectedSubModels.includes(model.id) ? 'bg-green-500' : 'bg-gray-400'
-                    }`}>
-                      {model.name.charAt(0)}
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-medium text-gray-800 text-sm">{model.name}</div>
-                    </div>
-                    {selectedSubModels.includes(model.id) && (
-                      <Check size={16} className="text-green-500" />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          </div>
 
           {/* AI Capabilities + 评估 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">AI 能力与评估</label>
             <p className="text-xs text-gray-500 mb-3">描述每个AI的擅长领域（针对不会说话的模型如图像/视频生成必须手填），软件会自动评估并动态调整</p>
             <div className="space-y-3">
-              {(task.multiAIMode ? [...selectedMainModels, ...selectedSubModels] : selectedMainModels).map((modelId) => {
+              {selectedModels.map((modelId) => {
                 const model = models.find(m => m.id === modelId)
                 if (!model) return null
                 const cap = aiCapabilities.find(c => c.modelId === modelId)
@@ -248,8 +169,8 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
                           {model.parameterSize && (
                             <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded-full">{model.parameterSize}</span>
                           )}
-                          {selectedMainModels.includes(modelId) && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主模型</span>
+                          {selectedModels.indexOf(modelId) === 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主用</span>
                           )}
                           {cap?.autoAssessed && (
                             <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">已自动评估</span>

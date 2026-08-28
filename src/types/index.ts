@@ -120,9 +120,7 @@ export interface Task {
   id: string
   name: string
   folderPath: string           // 工作文件夹（必选）
-  multiAIMode: boolean         // 是否开启多AI合作
-  mainModels: string[]         // 主模型ID列表（最多2个）
-  subModels: string[]          // 附属模型ID列表（无限）
+  mainModels: string[]         // 执行模型ID列表（第一个主用，其余备用）
   status: 'pending' | 'running' | 'completed' | 'failed'
   createdAt: number
   updatedAt: number
@@ -138,7 +136,7 @@ export interface SubTask {
 
 export interface TaskMessage {
   id: string
-  role: 'user' | 'main' | 'sub' | 'system'
+  role: 'user' | 'main' | 'system'
   content: string
   modelId?: string             // 执行此消息的模型
   assignedTo?: string          // 分配给哪个模型

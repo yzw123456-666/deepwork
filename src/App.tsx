@@ -86,12 +86,6 @@ const ProjectsPage: React.FC = () => {
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <h3 className="font-medium text-gray-800">{task.name}</h3>
-                        {task.multiAIMode && (
-                          <span className="px-2 py-0.5 bg-primary-100 text-primary-600 text-xs rounded-full flex items-center gap-1">
-                            <Bot size={10} />
-                            多AI合作
-                          </span>
-                        )}
                         <span className={`px-2 py-0.5 text-xs rounded-full ${
                           task.status === 'running' ? 'bg-blue-100 text-blue-600' :
                           task.status === 'completed' ? 'bg-green-100 text-green-600' :
@@ -108,18 +102,10 @@ const ProjectsPage: React.FC = () => {
                           <FolderOpen size={12} />
                           {task.folderPath.split('\\').pop() || task.folderPath.split('/').pop()}
                         </span>
-                        {task.multiAIMode && (
-                          <>
-                            <span className="flex items-center gap-1">
-                              <Bot size={12} />
-                              主模型: {task.mainModels.map(getModelName).join(', ') || '未选择'}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Zap size={12} />
-                              附属: {task.subModels.length}个
-                            </span>
-                          </>
-                        )}
+                        <span className="flex items-center gap-1">
+                          <Bot size={12} />
+                          {task.mainModels.map(getModelName).join(', ') || '未选择'}
+                        </span>
                       </div>
                     </div>
                     <button
