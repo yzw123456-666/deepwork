@@ -141,7 +141,7 @@ export async function callModel(
     body: JSON.stringify({
       model: model.name,
       messages,
-      stream: false,
+      stream: true,
       temperature,
       max_tokens: 4096,
     }),
@@ -151,25 +151,83 @@ export async function callModel(
     const text = await response.text().catch(() => '')
     throw new Error(`API ${response.status}: ${text.slice(0, 200)}`)
   }
-  const json = await response.json()
-  const msg = json.choices?.[0]?.message || {}
-  let content: string = msg.content || ''
-  // 思考过程：reasoning_content 字段（GLM/DeepSeek R1 等）或 <think> 标签
-  const reasoning: string = msg.reasoning_content || ''
-  if (reasoning.trim()) {
-    try { onThinking?.(reasoning.trim()) } catch {}
+
+  const contentType = response.headers.get('content-type') || ''
+
+  // 非流式回退（服务商不支持流式时）
+  if (!contentType.includes('text/event-stream') || !response.body) {
+    const json = await response.json()
+    const msg = json.choices?.[0]?.message || {}
+    let content: string = msg.content || ''
+    const reasoning: string = msg.reasoning_content || ''
+    if (reasoning.trim()) {
+      try { onThinking?.(reasoning.trim()) } catch {}
+    }
+    const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/)
+    if (thinkMatch) {
+      try { onThinking?.(thinkMatch[1].trim()) } catch {}
+      content = content.replace(/<think>[\s\S]*?<\/think>/, '').trim()
+    }
+    const openThink = content.match(/<think>([\s\S]*)$/)
+    if (openThink && !thinkMatch) {
+      try { onThinking?.(openThink[1].trim()) } catch {}
+      content = ''
+    }
+    return content
   }
+
+  // 流式解析：reasoning_content 增量实时回调，实现深度思考实时显示
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let content = ''
+  let thinkContent = ''
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const data = line.slice(6).trim()
+      if (data === '[DONE]') continue
+      try {
+        const json = JSON.parse(data)
+        const delta = json.choices?.[0]?.delta || {}
+        const reasoningDelta: string = delta.reasoning_content || ''
+        const contentDelta: string = delta.content || ''
+        if (reasoningDelta) {
+          thinkContent += reasoningDelta
+          try { onThinking?.(reasoningDelta) } catch {}
+        }
+        if (contentDelta) {
+          content += contentDelta
+        }
+      } catch {
+        // 忽略不完整 chunk
+      }
+    }
+  }
+
+  // <think> 标签提取（部分模型把思考混在 content 里）
   const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/)
   if (thinkMatch) {
     try { onThinking?.(thinkMatch[1].trim()) } catch {}
     content = content.replace(/<think>[\s\S]*?<\/think>/, '').trim()
   }
-  // 未闭合的 <think>（被 max_tokens 截断）
   const openThink = content.match(/<think>([\s\S]*)$/)
   if (openThink && !thinkMatch) {
     try { onThinking?.(openThink[1].trim()) } catch {}
     content = ''
   }
+
+  // reasoning_content 为空且无 <think> 时，尝试把 content 里疑似思考的前段传给 onThinking（保底）
+  if (!thinkContent && !thinkMatch && !openThink && !content) {
+    // 无输出
+  }
+
   return content
 }
 

@@ -58,12 +58,20 @@ function parseThinkingContent(content: string): { thinking: string; mainContent:
 // 思考过程组件（极简风格：小字标题 + 左边线内容）
 const ThinkingBlock: React.FC<{ content: string; isGenerating: boolean }> = ({ content, isGenerating }) => {
   const [expanded, setExpanded] = useState(isGenerating)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!isGenerating && expanded) {
       setExpanded(false)
     }
   }, [isGenerating])
+
+  // 生成中自动滚动到底部
+  useEffect(() => {
+    if (isGenerating && expanded && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    }
+  }, [content, isGenerating, expanded])
 
   if (!content) return null
 
@@ -78,7 +86,12 @@ const ThinkingBlock: React.FC<{ content: string; isGenerating: boolean }> = ({ c
         {isGenerating && <Loader2 size={10} className="animate-spin text-gray-400" />}
       </button>
       {expanded && (
-        <div className="mt-2 ml-1 pl-3 border-l-2 border-gray-200 text-[13px] text-gray-500 leading-relaxed whitespace-pre-wrap">
+        <div
+          ref={bodyRef}
+          className={`mt-2 ml-1 pl-3 border-l-2 border-gray-200 text-[13px] text-gray-500 leading-relaxed whitespace-pre-wrap ${
+            isGenerating ? 'max-h-60 overflow-y-auto' : ''
+          }`}
+        >
           {content}
         </div>
       )}
@@ -244,11 +257,24 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
     abortControllerRef.current?.abort()
   }
 
-  // 思考过程缓冲区（按阶段收集，注入对应消息）
+  // 思考过程缓冲区（按阶段收集，注入对应消息）+ 实时显示
   const thinkingBufRef = useRef('')
+  const [liveThinking, setLiveThinking] = useState('')
+  const lastThinkRenderRef = useRef(0)
   const collectThinking = (t: string) => {
     if (!t) return
-    thinkingBufRef.current = thinkingBufRef.current ? `${thinkingBufRef.current}\n\n${t}` : t
+    thinkingBufRef.current += t
+    // 节流：最多 150ms 更新一次实时思考显示
+    const now = Date.now()
+    if (now - lastThinkRenderRef.current > 150) {
+      lastThinkRenderRef.current = now
+      setLiveThinking(thinkingBufRef.current)
+    }
+  }
+  const resetThinking = () => {
+    thinkingBufRef.current = ''
+    lastThinkRenderRef.current = 0
+    setLiveThinking('')
   }
   const withThinking = (text: string) =>
     thinkingBufRef.current.trim() ? `<think>\n${thinkingBufRef.current.trim()}\n</think>\n\n${text}` : text
@@ -377,7 +403,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
     // 记录开始时间
     startTimeRef.current = Date.now()
     const allowExec = (config as any).systemTools === 'enabled'
-    thinkingBufRef.current = ''
+    resetThinking()
 
     try {
       if (!task.multiAIMode || task.mainModels.length === 0) {
@@ -490,11 +516,11 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
                 completed: false,
               }))
               await setSubtasks(task.id, subtasks)
-              thinkingBufRef.current = ''
+              resetThinking()
             },
             onSubStart: async (assignment: Assignment) => {
               await closeStatusMsg()
-              thinkingBufRef.current = ''
+              resetThinking()
               subStartTimes.set(assignment.taskDesc, Date.now())
               await addTaskMessage(task.id, {
                 id: uuidv4(),
@@ -516,7 +542,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
                 timestamp: Date.now(),
                 status: 'completed',
               })
-              thinkingBufRef.current = ''
+              resetThinking()
               // 标记子任务完成
               const currentSubtasks = useAppStore.getState().tasks.find(t => t.id === task.id)?.subtasks || []
               const matchSubtask = currentSubtasks.find(s => !s.completed && s.text.includes(assignment.modelId) && s.text.includes(assignment.taskDesc))
@@ -557,7 +583,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
             },
             onMainTakeover: async (assignment: Assignment) => {
               await updateStatusMsg(`🫡 ${mainModel.name} 正在接管失败的任务：${assignment.taskDesc}`)
-              thinkingBufRef.current = ''
+              resetThinking()
             },
             onContextUsage: (used: number, max: number) => setContextUsage({ used, max }),
             onModelContextUsage: (modelId: string, used: number, max: number) => setModelContextUsage(modelId, used, max),
@@ -1028,6 +1054,10 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
             <div className="flex justify-center py-2">
               <Loader2 size={16} className="animate-spin text-primary-500" />
             </div>
+          )}
+          {/* 实时深度思考 */}
+          {isRunning && liveThinking.trim() && (
+            <ThinkingBlock content={liveThinking.trim()} isGenerating={true} />
           )}
           <div ref={messagesEndRef} />
         </div>
