@@ -40,7 +40,7 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   const toggleMainModel = (modelId: string) => {
     setSelectedMainModels(prev => {
       if (prev.includes(modelId)) return prev.filter(id => id !== modelId)
-      if (prev.length >= 2) return prev
+      if (task.multiAIMode && prev.length >= 2) return prev
       return [...prev, modelId]
     })
   }
@@ -144,6 +144,53 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
             </div>
           )}
 
+          {/* 执行模型（单模型任务） */}
+          {!task.multiAIMode && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                <Bot size={14} className="inline mr-1" />
+                执行模型（第一个为主，其余为备用，失败自动切换）
+              </label>
+              <div className="space-y-2">
+                {enabledModels.map((model, idx) => {
+                  const selected = selectedMainModels.includes(model.id)
+                  const order = selectedMainModels.indexOf(model.id)
+                  return (
+                    <div
+                      key={model.id}
+                      onClick={() => toggleMainModel(model.id)}
+                      className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
+                        selected
+                          ? 'bg-primary-50 border-2 border-primary-500'
+                          : 'bg-white border-2 border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${
+                        selected ? 'bg-primary-500' : 'bg-gray-400'
+                      }`}>
+                        {model.name.charAt(0)}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-800 text-sm flex items-center gap-2">
+                          {model.name}
+                          {selected && order === 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主用</span>
+                          )}
+                          {selected && order > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-600 rounded-full">备用{order}</span>
+                          )}
+                        </div>
+                      </div>
+                      {selected && (
+                        <Check size={16} className="text-primary-500" />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Sub Models */}
           {task.multiAIMode && (
             <div>
@@ -184,7 +231,7 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
             <label className="block text-sm font-medium text-gray-700 mb-2">AI 能力与评估</label>
             <p className="text-xs text-gray-500 mb-3">描述每个AI的擅长领域（针对不会说话的模型如图像/视频生成必须手填），软件会自动评估并动态调整</p>
             <div className="space-y-3">
-              {[...selectedMainModels, ...selectedSubModels].map((modelId) => {
+              {(task.multiAIMode ? [...selectedMainModels, ...selectedSubModels] : selectedMainModels).map((modelId) => {
                 const model = models.find(m => m.id === modelId)
                 if (!model) return null
                 const cap = aiCapabilities.find(c => c.modelId === modelId)

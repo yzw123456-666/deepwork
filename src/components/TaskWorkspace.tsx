@@ -407,9 +407,7 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
 
     try {
       if (!task.multiAIMode || task.mainModels.length === 0) {
-        // 单AI模式：Agent Loop（失败时按设置换备用模型重试）
-        const model = getModel(task.mainModels[0]) || models[0]
-        if (!model) throw new Error('没有可用模型，请先在设置中添加模型')
+        // 单AI模式：Agent Loop（失败时自动切换备用模型）
 
         const { runAgentLoop } = await import('../services/agentEngine')
         // Prepare task history for single-agent mode - pass all messages, formatter will clean up
@@ -440,67 +438,72 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
           onThinking: collectThinking,
         }
 
-        // 选备用模型：指定id → 用它；auto → 选其他启用模型中成功率最高的
-        const pickFallback = (failedModel: typeof model) => {
-          const fbId = (config as any).fallbackModelId
-          if (!fbId) return null
-          let fallback: typeof model | undefined
-          if (fbId === 'auto') {
-            const candidates = models.filter(m => m.enabled && m.id !== failedModel.id)
-            fallback = candidates.sort((a, b) => {
+        // 执行队列：任务设置里选的模型（第一个主用，其余备用）+ 全局备用设置兜底
+        const taskModels = task.mainModels.map(getModel).filter(m => m?.enabled)
+        const queue: NonNullable<typeof taskModels[number]>[] = taskModels.length > 0 ? taskModels as any : (models[0] ? [models[0]] : [])
+        if (queue.length === 0) throw new Error('没有可用模型，请先在设置中添加模型')
+
+        // 全局备用（设置里配置）追加到队尾兜底
+        const fbId = (config as any).fallbackModelId
+        if (fbId === 'auto') {
+          const auto = models
+            .filter(m => m.enabled && !queue.some(q => q.id === m.id))
+            .sort((a, b) => {
               const ra = aiCapabilities.find(c => c.modelId === a.id)?.successRate ?? 100
               const rb = aiCapabilities.find(c => c.modelId === b.id)?.successRate ?? 100
               return rb - ra
             })[0]
-          } else if (fbId !== failedModel.id) {
-            const fb = getModel(fbId)
-            if (fb?.enabled) fallback = fb
-          }
-          return fallback && fallback.id !== failedModel.id ? fallback : null
+          if (auto) queue.push(auto)
+        } else if (fbId && !queue.some(q => q.id === fbId)) {
+          const fb = getModel(fbId)
+          if (fb?.enabled) queue.push(fb)
         }
 
-        let result: string
-        try {
-          result = await runAgentLoop(
-            model,
-            task.folderPath,
-            userRequest,
-            `你是一个AI任务执行助手「${model.name}」。你的擅长领域：${getCapabilityDesc(model.id)}。工作目录：${task.folderPath}\n\n你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。调用技能时使用 use_skill 工具，参数为 skill_name 和 description。请分析用户需求，合理使用工具，确保任务完成。任务完成时输出 DONE: 总结结果。`,
-            allowExec,
-            singleCallbacks,
-            taskHistory,
-            signal
-          )
-        } catch (err: any) {
-          // 失败变通：换备用模型重试一次
-          const fallback = pickFallback(model)
-          if (!fallback || signal?.aborted) throw err
-          await closeStatusMsg()
-          resetThinking()
-          await addTaskMessage(task.id, {
-            id: uuidv4(),
-            role: 'system',
-            content: `🔄 ${model.name} 执行失败（${err.message?.slice(0, 120)}），变通改由备用模型 ${fallback.name} 重试`,
-            timestamp: Date.now(),
-            status: 'running',
-          })
-          result = await runAgentLoop(
-            fallback,
-            task.folderPath,
-            userRequest,
-            `你是一个AI任务执行助手「${fallback.name}」。你的擅长领域：${getCapabilityDesc(fallback.id)}。工作目录：${task.folderPath}\n\n注意：前一个模型执行此任务失败了，请避免同样的错误。你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。任务完成时输出 DONE: 总结结果。`,
-            allowExec,
-            singleCallbacks,
-            taskHistory,
-            signal
-          )
+        // 依次尝试：失败自动切换下一个
+        let result: string | null = null
+        let lastErr: any = null
+        let successModel: NonNullable<typeof taskModels[number]> | null = null
+        for (let i = 0; i < queue.length; i++) {
+          const m = queue[i]
+          if (i > 0) {
+            if (signal?.aborted) break
+            await closeStatusMsg()
+            resetThinking()
+            await addTaskMessage(task.id, {
+              id: uuidv4(),
+              role: 'system',
+              content: `🔄 ${queue[i - 1].name} 执行失败（${lastErr?.message?.slice(0, 120) || '未知错误'}），变通改由 ${m.name} 重试`,
+              timestamp: Date.now(),
+              status: 'running',
+            })
+          }
+          try {
+            result = await runAgentLoop(
+              m,
+              task.folderPath,
+              userRequest,
+              i === 0
+                ? `你是一个AI任务执行助手「${m.name}」。你的擅长领域：${getCapabilityDesc(m.id)}。工作目录：${task.folderPath}\n\n你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。调用技能时使用 use_skill 工具，参数为 skill_name 和 description。请分析用户需求，合理使用工具，确保任务完成。任务完成时输出 DONE: 总结结果。`
+                : `你是一个AI任务执行助手「${m.name}」。你的擅长领域：${getCapabilityDesc(m.id)}。工作目录：${task.folderPath}\n\n注意：前一个模型执行此任务失败了，请避免同样的错误。你可以使用文件读写、目录浏览、命令执行、技能调用等工具来完成任务。任务完成时输出 DONE: 总结结果。`,
+              allowExec,
+              singleCallbacks,
+              taskHistory,
+              signal
+            )
+            successModel = m
+            break
+          } catch (err: any) {
+            lastErr = err
+            result = null
+          }
         }
+        if (result === null || !successModel) throw lastErr || new Error('所有模型均执行失败')
         await closeStatusMsg()
         await addTaskMessage(task.id, {
           id: uuidv4(),
           role: 'main',
           content: withThinking(result),
-          modelId: model.id,
+          modelId: successModel.id,
           timestamp: Date.now(),
           status: 'completed',
         })
