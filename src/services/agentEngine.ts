@@ -638,6 +638,7 @@ export async function orchestrate(
     onSubStart: (assignment: Assignment) => Promise<void>
     onSubDone: (assignment: Assignment, result: string) => Promise<void>
     onSubFail: (assignment: Assignment, error: string) => Promise<void>
+    onSubRetry?: (failed: Assignment, retryModelName: string) => Promise<void>
     onMainTakeover: (assignment: Assignment) => Promise<void>
     onToolUse?: (tool: string, args: Record<string, any>, result: ToolResult) => Promise<void>
     onModelContextUsage?: (modelId: string, usedTokens: number, maxTokens: number) => void
@@ -877,17 +878,81 @@ ${siblingResults ? `[已完成的同伴任务结果]\n${siblingResults}` : ''}
     }
   })
 
-  // 4. 主模型接管失败的任务
-  for (const task of takeoverTasks) {
-    await callbacks.onMainTakeover(task)
-    try {
-      // Build full context for main model takeover
-      const otherAssignments = plan.assignments
-        .filter(a => a.modelId !== task.modelId)
-        .map(a => `- ${a.modelId}: ${a.taskDesc}`)
-        .join('\n')
+  // 4. 变通处理：附属模型失败 → 先换一个健康的附属模型重试 → 再失败主模型亲自上
+  const statsByName = new Map<string, { taskCount: number; successRate: number; failureCount: number }>()
+  for (const s of capabilityStats) {
+    const m = subModels.find(sm => sm.id === s.modelId)
+    if (m) statsByName.set(m.name, s)
+  }
 
-      const takeoverContext = `你是主模型「${mainModel.name}」，正在接管失败的任务。你的擅长领域：${getCapabilityDesc(mainModel.id)}。工作目录：${root}
+  // 选替补：排除失败模型与不可靠模型，按成功率降序
+  const pickAlternate = (failedName: string): Model | null => {
+    const candidates = subModels
+      .filter(m => m.name !== failedName && !unreliableIds.has(m.id))
+      .sort((a, b) => (statsByName.get(b.name)?.successRate ?? 100) - (statsByName.get(a.name)?.successRate ?? 100))
+    return candidates[0] || null
+  }
+
+  for (const task of takeoverTasks) {
+    let handled = false
+
+    // 4.1 尝试换一个附属模型重试
+    if (!signal?.aborted) {
+      const alternate = pickAlternate(task.modelId)
+      if (alternate) {
+        await callbacks.onSubRetry?.(task, alternate.name)
+        try {
+          const retryContext = `你是附属模型「${alternate.name}」。你的擅长领域：${getCapabilityDesc(alternate.id)}。工作目录：${root}
+
+[原始任务目标]
+${userRequest}
+
+[整体计划]
+${plan.assignments.map(a => `- ${a.modelId}: ${a.taskDesc}`).join('\n')}
+
+[你要完成的任务]
+${task.taskDesc}
+
+注意：附属模型「${task.modelId}」执行此任务失败了（请避免同样的错误）。请使用工具完成任务，任务完成时输出 DONE: 总结结果。`
+          const result = await runAgentLoop(
+            alternate,
+            root,
+            task.taskDesc,
+            retryContext,
+            allowExec,
+            {
+              onStatus: callbacks.onStatus,
+              onToolUse: async (tool, args, result) => {
+                await callbacks.onToolUse?.(tool, args, result)
+              },
+              onModelContextUsage: callbacks.onModelContextUsage,
+              onContextUsage: callbacks.onContextUsage,
+              onThinking: callbacks.onThinking,
+            },
+            cleanedHistory,
+            signal
+          )
+          successResults.push(`[${alternate.name} (替补接管) ✅]\n${result}`)
+          const fi = failures.findIndex(f => f.taskDesc === task.taskDesc)
+          if (fi >= 0) failures.splice(fi, 1)
+          handled = true
+        } catch {
+          // 替补也失败 → 主模型亲自上
+        }
+      }
+    }
+
+    // 4.2 主模型接管（替补失败或无可用替补）
+    if (!handled && !signal?.aborted) {
+      await callbacks.onMainTakeover(task)
+      try {
+        // Build full context for main model takeover
+        const otherAssignments = plan.assignments
+          .filter(a => a.modelId !== task.modelId)
+          .map(a => `- ${a.modelId}: ${a.taskDesc}`)
+          .join('\n')
+
+        const takeoverContext = `你是主模型「${mainModel.name}」，正在接管失败的任务。你的擅长领域：${getCapabilityDesc(mainModel.id)}。工作目录：${root}
 
 [原始任务目标]
 ${userRequest}
@@ -902,30 +967,31 @@ ${otherAssignments ? `[其他附属模型正在并行执行的任务]\n${otherAs
 
 前一个附属模型执行失败了，你需要亲自完成这个任务。请结合原始任务目标和整体计划，利用你的能力和工具，确保任务完成。任务完成时输出 DONE: 总结结果。`
 
-      const result = await runAgentLoop(
-        mainModel,
-        root,
-        task.taskDesc,
-        takeoverContext,
-        allowExec,
-        {
-          onStatus: callbacks.onStatus,
-          onToolUse: async (tool, args, result) => {
-            await callbacks.onToolUse?.(tool, args, result)
+        const result = await runAgentLoop(
+          mainModel,
+          root,
+          task.taskDesc,
+          takeoverContext,
+          allowExec,
+          {
+            onStatus: callbacks.onStatus,
+            onToolUse: async (tool, args, result) => {
+              await callbacks.onToolUse?.(tool, args, result)
+            },
+            onModelContextUsage: callbacks.onModelContextUsage,
+            onContextUsage: callbacks.onContextUsage,
+            onThinking: callbacks.onThinking,
           },
-          onModelContextUsage: callbacks.onModelContextUsage,
-          onContextUsage: callbacks.onContextUsage,
-          onThinking: callbacks.onThinking,
-        },
-        cleanedHistory,
-        signal
-      )
-      successResults.push(`[${mainModel.name} (主模型接管) ✅]\n${result}`)
-      // 从失败列表移除
-      const fi = failures.findIndex(f => f.taskDesc === task.taskDesc)
-      if (fi >= 0) failures.splice(fi, 1)
-    } catch (err: any) {
-      // 接管也失败，保留失败记录
+          cleanedHistory,
+          signal
+        )
+        successResults.push(`[${mainModel.name} (主模型接管) ✅]\n${result}`)
+        // 从失败列表移除
+        const fi = failures.findIndex(f => f.taskDesc === task.taskDesc)
+        if (fi >= 0) failures.splice(fi, 1)
+      } catch (err: any) {
+        // 接管也失败，保留失败记录
+      }
     }
   }
 

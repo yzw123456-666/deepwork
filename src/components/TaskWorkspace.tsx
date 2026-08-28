@@ -581,6 +581,17 @@ const TaskWorkspace: React.FC<TaskWorkspaceProps> = ({ onBack }) => {
                 })
               }
             },
+            onSubRetry: async (failed: Assignment, retryModelName: string) => {
+              await closeStatusMsg()
+              resetThinking()
+              await addTaskMessage(task.id, {
+                id: uuidv4(),
+                role: 'system',
+                content: `🔄 ${failed.modelId} 执行失败，变通改由 ${retryModelName} 重试：${failed.taskDesc}`,
+                timestamp: Date.now(),
+                status: 'running',
+              })
+            },
             onMainTakeover: async (assignment: Assignment) => {
               await updateStatusMsg(`🫡 ${mainModel.name} 正在接管失败的任务：${assignment.taskDesc}`)
               resetThinking()
