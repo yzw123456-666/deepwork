@@ -234,15 +234,27 @@ export async function callModel(
 // ---------- 工具解析与执行 ----------
 
 export function parseToolCall(text: string): ToolCall | null {
-  // 容忍 TOOL 与 ARGS 之间的任意空白/换行，以及行首多余符号
   const match = text.match(/TOOL:\s*(\w+)[\s\n]+ARGS:\s*([\s\S]+)/)
   if (!match) return null
   try {
-    // 提取 JSON（容忍模型在 JSON 后附加文字）
     const argsStr = match[2].trim()
     const jsonStart = argsStr.indexOf('{')
-    const jsonEnd = argsStr.lastIndexOf('}')
-    if (jsonStart === -1 || jsonEnd === -1) return null
+    if (jsonStart === -1) return null
+    // 正确匹配嵌套括号：跳过字符串内的 {} 字符
+    let depth = 0
+    let inString = false
+    let escape = false
+    let jsonEnd = -1
+    for (let i = jsonStart; i < argsStr.length; i++) {
+      const c = argsStr[i]
+      if (escape) { escape = false; continue }
+      if (c === '\\') { escape = true; continue }
+      if (c === '"') { inString = !inString; continue }
+      if (inString) continue
+      if (c === '{') depth++
+      if (c === '}') { depth--; if (depth === 0) { jsonEnd = i; break } }
+    }
+    if (jsonEnd === -1) return null
     const args = JSON.parse(argsStr.slice(jsonStart, jsonEnd + 1))
     return { tool: match[1].trim(), args }
   } catch {
