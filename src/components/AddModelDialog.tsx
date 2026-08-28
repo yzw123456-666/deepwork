@@ -39,6 +39,7 @@ const AddModelDialog: React.FC<AddModelDialogProps> = ({ model, onSave, onClose 
   })
   const [capability, setCapability] = useState(model?.capability || '')
   const [parameterSize, setParameterSize] = useState(model?.parameterSize || '')
+  const [contextWindow, setContextWindow] = useState(model?.contextWindow?.toString() || '')
 
   const providerDropdownRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
@@ -74,6 +75,7 @@ const AddModelDialog: React.FC<AddModelDialogProps> = ({ model, onSave, onClose 
       baseUrl: selectedProviderId === 'custom' ? customEndpoint : currentProvider.baseUrl,
       enabled: true,
       parameterSize: parameterSize || undefined,
+      contextWindow: contextWindow ? parseInt(contextWindow) || undefined : undefined,
       advanced,
       capability,
     }
@@ -236,6 +238,18 @@ const AddModelDialog: React.FC<AddModelDialogProps> = ({ model, onSave, onClose 
               className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all"
             />
             <p className="text-xs text-gray-400 mt-1.5">填写模型参数量，系统会据此分配更合适的任务（大模型处理复杂任务，小模型处理简单任务）</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">上下文窗口</label>
+            <input
+              type="number" min={1024} max={1000000} step={1024}
+              value={contextWindow}
+              onChange={(e) => setContextWindow(e.target.value)}
+              placeholder="如：4096、32768、128000（留空默认32K）"
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all"
+            />
+            <p className="text-xs text-gray-400 mt-1.5">模型最大上下文长度，影响对话记忆和回复长度上限</p>
           </div>
 
           <div>

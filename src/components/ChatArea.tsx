@@ -229,7 +229,7 @@ const ChatArea: React.FC = () => {
 
       // 自动记忆：根据模型上下文窗口自动决定携带多少历史消息
       // 预留 40% 空间给回复，其余按字符预算从最新往回装填（约3字符≈1 token）
-      const CONTEXT_WINDOW = 32768
+      const CONTEXT_WINDOW = model.contextWindow || 32768
       const charBudget = Math.floor(CONTEXT_WINDOW * 0.6) * 3
       const historyMessages: typeof conversation.messages = []
       let usedChars = 0
@@ -264,7 +264,7 @@ const ChatArea: React.FC = () => {
           messages: allMessages,
           stream: useStreaming,
           temperature: (config as any).agentTemperature ?? 0.7,
-          max_tokens: (config as any).agentMaxTokens ?? 4096,
+          max_tokens: model.contextWindow || 32768,
         }),
         signal: abortControllerRef.current.signal,
       })

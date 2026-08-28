@@ -6,6 +6,7 @@ export interface Model {
   baseUrl?: string
   enabled: boolean
   parameterSize?: string    // 模型参数量，如 "7B", "14B", "70B"
+  contextWindow?: number    // 上下文窗口大小（tokens），如 4096, 32768, 128000
   advanced: {
     functionCall: boolean
     imageInput: boolean
@@ -55,7 +56,6 @@ export interface AppConfig {
   // 智能体设置
   agentSystemPrompt?: string
   agentTemperature?: number
-  agentMaxTokens?: number
   agentStreaming?: boolean
   agentAutoScroll?: boolean
   // 个性化

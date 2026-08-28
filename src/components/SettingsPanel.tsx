@@ -481,14 +481,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                       <span>{t('settings.agentTemperatureHigh')}</span>
                     </div>
                   </div>
-                  <SettingRow title={t('settings.agentMaxTokens')}>
-                    <input
-                      type="number" min={128} max={128000} step={128}
-                      value={cfg.agentMaxTokens ?? 4096}
-                      onChange={(e) => setConfig({ agentMaxTokens: parseInt(e.target.value) || 4096 })}
-                      className="w-28 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary-300"
-                    />
-                  </SettingRow>
                 </Card>
 
                 <SectionTitle>{t('settings.agentSystemPrompt')}</SectionTitle>
