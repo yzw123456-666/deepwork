@@ -24,6 +24,12 @@ import {
   MessageSquare,
   PenLine,
   Loader2,
+  Wrench,
+  ImagePlus,
+  Video,
+  Eye,
+  MonitorPlay,
+  AlertTriangle,
 } from 'lucide-react'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
@@ -31,9 +37,11 @@ import ChatArea from './components/ChatArea'
 import SettingsPanel from './components/SettingsPanel'
 import CreateTaskDialog from './components/CreateTaskDialog'
 import TaskSettings from './components/TaskSettings'
-import TaskWorkspace from './components/TaskWorkspace'
 import { useAppStore } from './stores'
-import { DirTreeItem } from './types/electron'
+import { DirTreeItem, InstalledSkill } from './types/electron'
+import { AIToolConfig, AIToolId, Conversation } from './types'
+import { v4 as uuidv4 } from 'uuid'
+import { invalidateSkillCatalog } from './services/agentEngine'
 
 const fontSizeMap: Record<string, string> = {
   small: '87.5%',
@@ -43,7 +51,7 @@ const fontSizeMap: Record<string, string> = {
 
 // 项目页面
 const ProjectsPage: React.FC = () => {
-  const { tasks, setCurrentTask, setActivePage, models } = useAppStore()
+  const { tasks, setCurrentTask, setActivePage, models, conversations, addConversation, setCurrentConversation } = useAppStore()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editingTask, setEditingTask] = useState<any>(null)
 
@@ -51,7 +59,25 @@ const ProjectsPage: React.FC = () => {
 
   const openTask = (task: any) => {
     setCurrentTask(task)
-    setActivePage('taskWorkspace')
+    // 任务不再有独立界面：打开该任务最新会话（无则新建），会话通过 taskId 关联任务并以其 folderPath 作为工作目录
+    const taskConvs = conversations
+      .filter(c => c.taskId === task.id)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    if (taskConvs.length > 0) {
+      setCurrentConversation(taskConvs[0])
+    } else {
+      const conv: Conversation = {
+        id: uuidv4(),
+        title: '新对话',
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        taskId: task.id,
+      }
+      addConversation(conv)
+      setCurrentConversation(conv)
+    }
+    setActivePage('chat')
   }
 
   return (
@@ -71,7 +97,7 @@ const ProjectsPage: React.FC = () => {
           <h2 className="text-lg font-semibold text-gray-800 mb-4">我的任务</h2>
           {tasks.length === 0 ? (
             <div className="text-center text-gray-400 py-16">
-              <FolderOpen size={48} className="mx-auto mb-3 text-gray-300" />
+              <FolderOpen size={48} className="mx-auto mb-3 text-gray-400" />
               <p>暂无任务，点击上方按钮创建</p>
             </div>
           ) : (
@@ -145,7 +171,7 @@ const SkillAvatar: React.FC<{ skill: any; size?: string }> = ({ skill, size = 'w
           (e.target as HTMLImageElement).style.display = 'none';
           (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
         }} />
-        <div className={`${size} ${skill.color || 'bg-gray-400'} rounded-full items-center justify-center text-lg font-medium text-white hidden`}>
+        <div className={`${size} ${skill.color || 'bg-gray-400'} rounded-full flex items-center justify-center text-lg font-medium text-white hidden`}>
           {skill.name?.[0] || '?'}
         </div>
       </div>
@@ -194,10 +220,12 @@ const SkillHubCard: React.FC<{ skill: any; isInstalled: boolean; isDown: boolean
 
 // 技能与连接器页面
 const ExpertsPage: React.FC = () => {
+  const { setActivePage } = useAppStore()
   const [activeTab, setActiveTab] = useState<'skillhub' | 'installed'>('skillhub')
   const [activeCategory, setActiveCategory] = useState('全部')
-  const [installedSkills, setInstalledSkills] = useState<Set<string>>(new Set())
-  const [enabledSkills, setEnabledSkills] = useState<Set<string>>(new Set())
+  // 已安装技能：真实持久化在主进程 userData/skills 目录，不再只是内存里的一个 Set
+  const [installed, setInstalled] = useState<InstalledSkill[]>([])
+  const [installedLoaded, setInstalledLoaded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; skill: any } | null>(null)
   const [downloading, setDownloading] = useState<Set<string>>(new Set())
@@ -206,9 +234,38 @@ const ExpertsPage: React.FC = () => {
   const [initialLoading, setInitialLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
+  const [actionMsg, setActionMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const msgTimerRef = useRef<number | null>(null)
 
   const categories = ['全部', '办公效率', '内容创作', '开发编程', '数据分析', 'AI Agent', '知识管理', '生活服务']
+
+  const notify = useCallback((type: 'ok' | 'err', text: string) => {
+    setActionMsg({ type, text })
+    if (msgTimerRef.current) window.clearTimeout(msgTimerRef.current)
+    msgTimerRef.current = window.setTimeout(() => setActionMsg(null), type === 'err' ? 6000 : 3000)
+  }, [])
+
+  useEffect(() => () => { if (msgTimerRef.current) window.clearTimeout(msgTimerRef.current) }, [])
+
+  const skillApi = typeof window !== 'undefined' ? window.electronAPI?.skills : undefined
+
+  // 从磁盘读取真实已安装列表
+  const refreshInstalled = useCallback(async () => {
+    if (!skillApi) { setInstalledLoaded(true); return }
+    try {
+      const r = await skillApi.list()
+      setInstalled(r?.ok && Array.isArray(r.skills) ? r.skills : [])
+    } catch (e) {
+      console.error('skills:list failed:', e)
+      setInstalled([])
+    }
+    // Agent 侧缓存的技能清单同步失效，下一轮任务会重新读取
+    invalidateSkillCatalog()
+    setInstalledLoaded(true)
+  }, [skillApi])
+
+  useEffect(() => { refreshInstalled() }, [refreshInstalled])
 
   // 实时从 SkillHub API 获取技能（按下载量排序）
   const fetchSkillhub = useCallback(async (pageNum: number, append = false) => {
@@ -230,6 +287,9 @@ const ExpertsPage: React.FC = () => {
           category: catMap[s.category] || '其他',
           downloads: s.downloads || 0,
           stars: s.stars || 0,
+          // owner 用于消歧：ClawHub 上同名 slug 可能属于不同作者
+          owner: s.upstream_owner_login || s.namespace?.handle || '',
+          version: s.version || '',
         }))
         if (append) {
           setSkillhubSkills(prev => [...prev, ...mapped])
@@ -245,17 +305,21 @@ const ExpertsPage: React.FC = () => {
     setInitialLoading(false)
   }, [])
 
-  // 首次加载 + 搜索时重新获取
+  // 首次加载 / 切到技能页 / 清空搜索 —— 统一在这里拉全量列表
+  // 早期版本下面那个防抖 effect 在空关键词时也会拉一次，首屏会重复请求两次
   useEffect(() => {
-    if (activeTab === 'skillhub') {
-      setPage(1)
-      fetchSkillhub(1, false)
-    }
-  }, [activeTab, fetchSkillhub])
+    if (activeTab !== 'skillhub') return
+    if (searchQuery.trim()) return // 有关键词时交给下面的搜索请求
+    setPage(1)
+    setHasMore(true)
+    fetchSkillhub(1, false)
+  }, [activeTab, searchQuery, fetchSkillhub])
 
   // 搜索时防抖获取
   useEffect(() => {
-    if (activeTab !== 'skillhub' || !searchQuery) return
+    if (activeTab !== 'skillhub') return
+    // 清空搜索由上面的 effect 负责，这里只处理有关键词的情况
+    if (!searchQuery.trim()) return
     const timer = setTimeout(async () => {
       try {
         const resp = await fetch(`https://api.skillhub.cn/api/skills?page=1&pageSize=50&sortBy=downloads&keyword=${encodeURIComponent(searchQuery)}`, {
@@ -270,7 +334,11 @@ const ExpertsPage: React.FC = () => {
             slug: s.slug, name: s.name, desc: (s.description_zh || s.description || '').slice(0, 120),
             iconUrl: s.iconUrl || null, color: colors[i % colors.length],
             category: catMap[s.category] || '其他', downloads: s.downloads || 0, stars: s.stars || 0,
+            owner: s.upstream_owner_login || s.namespace?.handle || '', version: s.version || '',
           })))
+          // 搜索结果是单次查询，没有后续分页，否则滚动会把未过滤的第 N 页数据追加进来
+          setHasMore(false)
+          setPage(1)
         }
       } catch (e) { console.error(e) }
     }, 500)
@@ -300,35 +368,94 @@ const ExpertsPage: React.FC = () => {
     return () => el.removeEventListener('scroll', handleScroll)
   }, [activeTab, loadingMore, hasMore, page])
 
-  const installSkill = useCallback((slug: string) => {
+  // 真实安装：主进程从 ClawHub 下载 zip → 解压到 userData/skills/<slug>
+  const installSkill = useCallback(async (slug: string) => {
+    if (!skillApi) {
+      notify('err', '当前环境不支持安装技能，请在桌面客户端中使用')
+      return
+    }
+    const meta = skillhubSkills.find(s => s.slug === slug)
+    const label = meta?.name || slug
     setDownloading(prev => { const n = new Set(prev); n.add(slug); return n })
-    setTimeout(() => {
-      setInstalledSkills(prev => { const n = new Set(prev); n.add(slug); return n })
-      setEnabledSkills(prev => { const n = new Set(prev); n.add(slug); return n })
+    try {
+      const r = await skillApi.install({
+        slug,
+        owner: meta?.owner || undefined,
+        name: meta?.name,
+        desc: meta?.desc,
+        iconUrl: meta?.iconUrl || undefined,
+        category: meta?.category,
+      })
+      if (!r?.ok) notify('err', `安装「${label}」失败：${r?.error || '未知错误'}`)
+      else notify('ok', `已安装「${r.skill?.name || label}」${r.skill?.version ? ' v' + r.skill.version : ''}${r.notice ? '（' + r.notice + '）' : ''}`)
+      await refreshInstalled()
+    } catch (e: any) {
+      notify('err', `安装「${label}」失败：${e?.message || e}`)
+    } finally {
       setDownloading(prev => { const n = new Set(prev); n.delete(slug); return n })
-    }, 800)
-  }, [])
+    }
+  }, [skillApi, skillhubSkills, refreshInstalled, notify])
 
-  const toggleEnabled = (slug: string) => {
-    setEnabledSkills(prev => {
-      const n = new Set(prev)
-      if (n.has(slug)) n.delete(slug); else n.add(slug)
-      return n
-    })
-  }
+  const toggleEnabled = useCallback(async (slug: string, next: boolean) => {
+    if (!skillApi) return
+    // 先本地乐观更新，失败再回滚
+    setInstalled(prev => prev.map(s => (s.slug === slug ? { ...s, enabled: next } : s)))
+    try {
+      const r = await skillApi.setEnabled(slug, next)
+      if (!r?.ok) {
+        notify('err', r?.error || '切换启用状态失败')
+        await refreshInstalled()
+      }
+    } catch (e: any) {
+      // IPC 直接 reject（主进程抛错）时上面不会走到，必须单独兜住并回滚
+      notify('err', `切换启用状态失败：${e?.message || e}`)
+      await refreshInstalled()
+    }
+  }, [skillApi, refreshInstalled, notify])
 
-  const uninstallSkill = (slug: string) => {
-    setInstalledSkills(prev => { const n = new Set(prev); n.delete(slug); return n })
-    setEnabledSkills(prev => { const n = new Set(prev); n.delete(slug); return n })
-  }
+  const uninstallSkill = useCallback(async (slug: string) => {
+    if (!skillApi) return
+    const r = await skillApi.remove(slug)
+    if (!r?.ok) notify('err', r?.error || '卸载失败')
+    else notify('ok', `已卸载「${slug}」`)
+    await refreshInstalled()
+  }, [skillApi, refreshInstalled, notify])
+
+  const openSkillFolder = useCallback(async (slug: string) => {
+    try {
+      const api = window.electronAPI
+      if (!api) return
+      const info = await api.app.getInfo()
+      const dir = [info.skillsPath, slug].filter(Boolean).join('/')
+      await api.shell.openPath(dir)
+    } catch (e) {
+      notify('err', '打开技能文件夹失败')
+    }
+  }, [notify])
 
   const handleContextMenu = (e: React.MouseEvent, skill: any) => {
     e.preventDefault()
-    setContextMenu({ x: e.clientX, y: e.clientY, skill })
+    // 贴边时把菜单拉回可视区，避免右键菜单被窗口裁掉
+    const x = Math.min(e.clientX, Math.max(8, window.innerWidth - 180))
+    const y = Math.min(e.clientY, Math.max(8, window.innerHeight - 150))
+    setContextMenu({ x, y, skill })
   }
 
-  const allSkillSources = skillhubSkills
-  const installedList = allSkillSources.filter(s => installedSkills.has(s.slug))
+  // 已安装列表以磁盘为准；SkillHub 列表只用来补充图标/分类等展示信息
+  const installedSlugs = useMemo(() => new Set(installed.map(s => s.slug)), [installed])
+  const installedList = useMemo(() => installed.map(s => {
+    const remote = skillhubSkills.find(x => x.slug === s.slug)
+    return {
+      slug: s.slug,
+      name: s.name || remote?.name || s.slug,
+      desc: s.desc || remote?.desc || '（无描述）',
+      iconUrl: s.iconUrl || remote?.iconUrl || null,
+      color: remote?.color,
+      category: s.category || remote?.category || '其他',
+      version: s.version,
+      enabled: s.enabled !== false,
+    }
+  }), [installed, skillhubSkills])
 
   const getDisplaySkills = () => {
     if (activeTab === 'skillhub') return skillhubSkills
@@ -360,8 +487,8 @@ const ExpertsPage: React.FC = () => {
               }`}
             >
               {tab.label}
-              {tab.id === 'installed' && installedSkills.size > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-primary-100 text-primary-600 rounded-full">{installedSkills.size}</span>
+              {tab.id === 'installed' && installed.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-primary-100 text-primary-600 rounded-full">{installed.length}</span>
               )}
             </button>
           ))}
@@ -369,6 +496,16 @@ const ExpertsPage: React.FC = () => {
       </div>
 
       <div className="p-6">
+        {/* 操作结果提示 */}
+        {actionMsg && (
+          <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm flex items-start gap-2 ${
+            actionMsg.type === 'err' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-700 border border-green-100'
+          }`}>
+            {actionMsg.type === 'err' ? <Wrench size={15} className="mt-0.5 flex-shrink-0" /> : <Check size={15} className="mt-0.5 flex-shrink-0" />}
+            <span className="break-all">{actionMsg.text}</span>
+          </div>
+        )}
+
         {/* Search */}
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex-1">
@@ -406,13 +543,13 @@ const ExpertsPage: React.FC = () => {
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Download size={24} className="text-gray-400" />
                 </div>
-                <p className="text-gray-500 text-sm mb-1">还没有安装任何技能</p>
-                <p className="text-gray-400 text-xs">去「SkillHub」浏览并安装技能</p>
+                <p className="text-gray-500 text-sm mb-1">{installedLoaded ? '还没有安装任何技能' : '正在读取已安装技能…'}</p>
+                <p className="text-gray-400 text-xs">{installedLoaded ? '去「SkillHub」浏览并安装技能' : ' '}</p>
               </div>
             ) : (
               displaySkills.map((skill: any) => {
                 const slug = skill.slug
-                const isEnabled = enabledSkills.has(slug)
+                const isEnabled = skill.enabled
                 return (
                   <div
                     key={slug}
@@ -422,7 +559,10 @@ const ExpertsPage: React.FC = () => {
                   <div className="flex items-center gap-3">
                     <SkillAvatar skill={skill} />
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-800 text-sm truncate">{skill.name}</div>
+                      <div className="font-medium text-gray-800 text-sm truncate flex items-center gap-1.5">
+                        <span className="truncate">{skill.name}</span>
+                        {skill.version && <span className="text-[10px] text-gray-400 flex-shrink-0">v{skill.version}</span>}
+                      </div>
                       <p className="text-xs text-gray-400 mt-0.5">{skill.desc}</p>
                     </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -433,7 +573,8 @@ const ExpertsPage: React.FC = () => {
                           <MoreHorizontal size={16} className="text-gray-400" />
                         </button>
                         <button
-                          onClick={() => toggleEnabled(slug)}
+                          onClick={() => toggleEnabled(slug, !isEnabled)}
+                          title={isEnabled ? '点击停用' : '点击启用'}
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                             isEnabled ? 'bg-cyan-500' : 'bg-gray-300'
                           }`}
@@ -467,7 +608,7 @@ const ExpertsPage: React.FC = () => {
                   <SkillHubCard
                     key={slug}
                     skill={skill}
-                    isInstalled={installedSkills.has(slug)}
+                    isInstalled={installedSlugs.has(slug)}
                     isDown={downloading.has(slug)}
                     onInstall={installSkill}
                   />
@@ -498,15 +639,30 @@ const ExpertsPage: React.FC = () => {
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(e) => e.stopPropagation()}
           >
-            <button className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+            <button
+              onClick={() => {
+                const s = contextMenu?.skill
+                setContextMenu(null)
+                setActivePage('chat')
+                if (s) notify('ok', `已切换到对话，直接描述你的需求，AI 会自动调用「${s.name}」`)
+              }}
+              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5"
+            >
               <MessageSquare size={15} className="text-gray-400" /> 去对话
             </button>
-            <button className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+            <button
+              onClick={() => {
+                const s = contextMenu?.skill
+                setContextMenu(null)
+                if (s) openSkillFolder(s.slug)
+              }}
+              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5"
+            >
               <FolderOpen size={15} className="text-gray-400" /> 打开文件夹
             </button>
             <div className="border-t border-gray-100 my-1" />
             <button
-              onClick={() => { uninstallSkill(contextMenu.skill.slug); setContextMenu(null) }}
+              onClick={() => { const s = contextMenu?.skill; setContextMenu(null); if (s) uninstallSkill(s.slug) }}
               className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 flex items-center gap-2.5"
             >
               <Trash2 size={15} /> 卸载
@@ -566,7 +722,7 @@ const AutomationPage: React.FC = () => {
           </div>
         ) : (
           <div className="text-center text-gray-400">
-            <Play size={48} className="mx-auto mb-3 text-gray-300" />
+            <Play size={48} className="mx-auto mb-3 text-gray-400" />
             <p>暂无运行记录</p>
           </div>
         )}
@@ -581,14 +737,19 @@ const ResourcesPage: React.FC = () => {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
 
   const loadDirTree = async () => {
-    if (window.electronAPI) {
+    if (!window.electronAPI) return
+    try {
       const info = await window.electronAPI.app.getInfo()
       const tree = await window.electronAPI.fs.readDirTree(info.userDataPath)
-      setDirTree(tree)
-      const convDir = tree.find((item: any) => item.name === 'conversations')
+      setDirTree(Array.isArray(tree) ? tree : [])
+      const convDir = (Array.isArray(tree) ? tree : []).find((item: any) => item.name === 'conversations')
       if (convDir) {
         setExpandedDirs(new Set([convDir.path]))
       }
+    } catch (e) {
+      // IPC 失败时不静默：否则界面永远停在加载中
+      console.error('loadDirTree failed:', e)
+      setDirTree([])
     }
   }
 
@@ -670,167 +831,6 @@ const ResourcesPage: React.FC = () => {
   )
 }
 
-// AI介绍页面
-const AIIntroPage: React.FC = () => {
-  const { models, aiCapabilities, updateModel } = useAppStore()
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editValue, setEditValue] = useState('')
-
-  const getCapabilityDesc = (modelId: string): string => {
-    const model = models.find(m => m.id === modelId)
-    const cap = aiCapabilities.find(c => c.modelId === modelId)
-    if (model?.capability) return model.capability
-    if (cap?.strengths?.length) return cap.strengths.join('、')
-    return ''
-  }
-
-  const getStrengths = (modelId: string): string[] => {
-    const cap = aiCapabilities.find(c => c.modelId === modelId)
-    return cap?.strengths || []
-  }
-
-  const getWeaknesses = (modelId: string): string[] => {
-    const cap = aiCapabilities.find(c => c.modelId === modelId)
-    return cap?.weaknesses || []
-  }
-
-  const getRating = (modelId: string): number => {
-    const cap = aiCapabilities.find(c => c.modelId === modelId)
-    return cap?.rating || 0
-  }
-
-  const handleSave = async (modelId: string) => {
-    await updateModel(modelId, { capability: editValue })
-    setEditingId(null)
-  }
-
-  const enabledModels = models.filter(m => m.enabled)
-
-  return (
-    <div className="flex-1 p-8 overflow-y-auto">
-      <div className="max-w-4xl">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">AI 介绍</h1>
-          <p className="text-gray-500 mt-1">查看所有已添加 AI 的能力介绍，可手动编辑</p>
-        </div>
-
-        {enabledModels.length === 0 ? (
-          <div className="text-center py-16">
-            <Bot size={48} className="mx-auto mb-3 text-gray-300" />
-            <p className="text-gray-500">暂无已添加的 AI 模型</p>
-            <p className="text-xs text-gray-400 mt-1">请先在设置中添加模型</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {enabledModels.map((model) => {
-              const strengthList = getStrengths(model.id)
-              const weaknessList = getWeaknesses(model.id)
-              const rating = getRating(model.id)
-              const isEditing = editingId === model.id
-
-              return (
-                <div key={model.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                  {/* Header */}
-                  <div className="flex items-center gap-4 px-5 py-4 border-b border-gray-100">
-                    <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg bg-gradient-to-br from-primary-400 to-primary-600">
-                      {model.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-gray-800">{model.name}</h3>
-                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{model.provider}</span>
-                        {model.parameterSize && (
-                          <span className="text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full">{model.parameterSize}</span>
-                        )}
-                        {rating > 0 && (
-                          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                            {'★'.repeat(Math.min(5, Math.round(rating / 2)))} {rating}/10
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-400 mt-0.5">ID: {model.id}</p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setEditingId(isEditing ? null : model.id)
-                        setEditValue(model.capability || '')
-                      }}
-                      className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                        isEditing ? 'bg-gray-200 text-gray-600' : 'bg-primary-50 text-primary-600 hover:bg-primary-100'
-                      }`}
-                    >
-                      {isEditing ? '取消' : '编辑'}
-                    </button>
-                  </div>
-
-                  {/* Content */}
-                  <div className="px-5 py-4">
-                    {isEditing ? (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">能力介绍</label>
-                        <textarea
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          placeholder="如：擅长代码编写、数据分析、文案创作..."
-                          rows={3}
-                          className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all resize-none"
-                        />
-                        <div className="flex justify-end mt-2">
-                          <button
-                            onClick={() => handleSave(model.id)}
-                            className="px-4 py-2 bg-primary-500 text-white text-sm rounded-lg hover:bg-primary-600 transition-colors"
-                          >
-                            保存
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        {/* Capability description */}
-                        <div className="mb-4">
-                          <div className="text-xs font-medium text-gray-500 mb-1">擅长能力</div>
-                          {getCapabilityDesc(model.id) ? (
-                            <p className="text-sm text-gray-700">{getCapabilityDesc(model.id)}</p>
-                          ) : (
-                            <p className="text-sm text-gray-400 italic">未设置能力介绍（添加模型时可自动评估或手动填写）</p>
-                          )}
-                        </div>
-
-                        {/* Strengths */}
-                        {strengthList.length > 0 && (
-                          <div className="mb-3">
-                            <div className="text-xs font-medium text-gray-500 mb-1">擅长领域</div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {strengthList.map((s, i) => (
-                                <span key={i} className="px-2.5 py-1 bg-green-50 text-green-700 text-xs rounded-lg">{s}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Weaknesses */}
-                        {weaknessList.length > 0 && (
-                          <div>
-                            <div className="text-xs font-medium text-gray-500 mb-1">不擅长领域</div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {weaknessList.map((w, i) => (
-                                <span key={i} className="px-2.5 py-1 bg-red-50 text-red-600 text-xs rounded-lg">{w}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // Token用量页面
 const TokenUsagePage: React.FC = () => {
@@ -972,7 +972,7 @@ const TokenUsagePage: React.FC = () => {
             <h2 className="text-lg font-semibold text-gray-800 mb-4">Token 消耗趋势</h2>
             {chartData.length === 0 ? (
               <div className="text-center py-16">
-                <BarChart3 size={48} className="mx-auto mb-3 text-gray-300" />
+                <BarChart3 size={48} className="mx-auto mb-3 text-gray-400" />
                 <p className="text-gray-500">暂无 Token 用量记录</p>
                 <p className="text-xs text-gray-400 mt-1">发送消息后将自动记录</p>
               </div>
@@ -1064,7 +1064,7 @@ const TokenUsagePage: React.FC = () => {
           <h2 className="text-lg font-semibold text-gray-800 mb-4">最近记录</h2>
           {tokenUsage.length === 0 ? (
             <div className="text-center py-16">
-              <BarChart3 size={48} className="mx-auto mb-3 text-gray-300" />
+              <BarChart3 size={48} className="mx-auto mb-3 text-gray-400" />
               <p className="text-gray-500">暂无 Token 用量记录</p>
               <p className="text-xs text-gray-400 mt-1">发送消息后将自动记录每次 API 调用的 Token 消耗</p>
             </div>
@@ -1096,12 +1096,120 @@ const TokenUsagePage: React.FC = () => {
   )
 }
 
+// AI 工具页面（更多 → AI 工具）
+const AI_TOOLS_META: Array<{ id: AIToolId; name: string; desc: string; icon: any; iconColor: string; badgeColor: string }> = [
+  { id: 'image-gen', name: '图片生成', desc: '根据文字描述生成图片', icon: ImagePlus, iconColor: 'text-purple-600', badgeColor: 'bg-purple-100' },
+  { id: 'video-gen', name: '视频生成', desc: '根据文字描述生成视频', icon: Video, iconColor: 'text-blue-600', badgeColor: 'bg-blue-100' },
+  { id: 'image-understand', name: '图片理解', desc: '为不支持图片输入的模型补齐看图能力', icon: Eye, iconColor: 'text-green-600', badgeColor: 'bg-green-100' },
+  { id: 'video-understand', name: '视频理解', desc: '为不支持视频输入的模型补齐视频理解能力', icon: MonitorPlay, iconColor: 'text-amber-600', badgeColor: 'bg-amber-100' },
+]
+
+const AIToolsPage: React.FC = () => {
+  const { setConfig, config } = useAppStore()
+
+  // 与默认工具定义合并（老配置里缺省的补默认值）
+  const saved: AIToolConfig[] = (config as any).aiTools || []
+  const tools = AI_TOOLS_META.map(m => {
+    const s = saved.find(t => t.id === m.id)
+    return { ...m, enabled: s?.enabled ?? false, baseUrl: s?.baseUrl ?? '', apiKey: s?.apiKey ?? '', model: s?.model ?? '' }
+  })
+
+  const updateTool = (id: AIToolId, patch: Partial<AIToolConfig>) => {
+    // 只持久化核心配置字段（name/icon 等展示信息由 META 定义）
+    setConfig({
+      aiTools: tools.map(t => {
+        // 只对目标工具应用补丁，其余保持原值
+        const merged = t.id === id ? { ...t, ...patch } : t
+        return { id: t.id, enabled: merged.enabled, baseUrl: merged.baseUrl, apiKey: merged.apiKey, model: merged.model }
+      }),
+    })
+  }
+
+  return (
+    <div className="flex-1 p-8 overflow-y-auto">
+      <div className="max-w-3xl">
+        <h1 className="text-2xl font-bold text-gray-800">AI 工具</h1>
+        <p className="text-gray-500 mt-1">开启扩展能力并为每个工具配置专用的 API 与模型，开启后即可使用对应功能</p>
+
+        <div className="mt-6 space-y-4">
+          {tools.map((tool) => (
+            <div key={tool.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3.5">
+                  <div className={`w-11 h-11 ${tool.badgeColor} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                    <tool.icon size={22} className={tool.iconColor} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium text-gray-800">{tool.name}</h3>
+                      {tool.enabled && (
+                        <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-600 rounded-full">已开启</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">{tool.desc}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => updateTool(tool.id, { enabled: !tool.enabled })}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
+                    tool.enabled ? 'bg-primary-500' : 'bg-gray-300'
+                  }`}
+                  title={tool.enabled ? '关闭' : '开启'}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                    tool.enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+
+              {/* 开启后展开：专用 API 配置 */}
+              {tool.enabled && (
+                <div className="px-5 pb-5 pt-4 border-t border-gray-100 space-y-3.5">
+                  <p className="text-xs text-gray-400">为该工具配置专用的 AI 服务（等同模型添加页的配置）</p>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Base URL</label>
+                    <input
+                      value={tool.baseUrl}
+                      onChange={(e) => updateTool(tool.id, { baseUrl: e.target.value })}
+                      placeholder="https://api.example.com/v1"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">API Key</label>
+                    <input
+                      type="password"
+                      value={tool.apiKey}
+                      onChange={(e) => updateTool(tool.id, { apiKey: e.target.value })}
+                      placeholder="输入 API Key"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">模型</label>
+                    <input
+                      value={tool.model}
+                      onChange={(e) => updateTool(tool.id, { model: e.target.value })}
+                      placeholder="模型名称，如 GLM-5.3-Flash"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 transition-colors"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // 更多页面
 const MorePage: React.FC = () => {
   const { setActivePage } = useAppStore()
 
   const items = [
-    { icon: Bot, title: 'AI 介绍', desc: '查看所有已添加 AI 的能力介绍', color: 'text-primary-500', bgColor: 'bg-primary-50', page: 'aiIntro' },
+    { icon: Wrench, title: 'AI 工具', desc: '图片/视频生成与理解的专用 AI 配置', color: 'text-purple-500', bgColor: 'bg-purple-50', page: 'aiTools' },
     { icon: BarChart3, title: 'Token 用量', desc: '查看 API Token 消耗统计', color: 'text-blue-500', bgColor: 'bg-blue-50', page: 'tokenUsage' },
   ]
 
@@ -1131,7 +1239,7 @@ const MorePage: React.FC = () => {
 
 function App() {
   const { i18n } = useTranslation()
-  const { loaded, loadAll, config, showSettings, activePage } = useAppStore()
+  const { loaded, loadAll, loadError, config, showSettings, activePage } = useAppStore()
 
   useEffect(() => {
     loadAll().then(() => {
@@ -1144,6 +1252,81 @@ function App() {
     const size = (config as any).fontSize ?? 'medium'
     document.documentElement.style.fontSize = fontSizeMap[size] || '100%'
   }, [(config as any).fontSize])
+
+  // 主题：light / dark / system（跟随系统时实时响应系统切换）；accent 为主题色
+  useEffect(() => {
+    const mode = (config as any).theme ?? 'light'
+    const accent = (config as any).accent || 'sky'
+    const root = document.documentElement
+    if (accent && accent !== 'sky') root.setAttribute('data-accent', accent)
+    else root.removeAttribute('data-accent')
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+    const apply = () => {
+      const dark = mode === 'dark' || (mode === 'system' && !!mq?.matches)
+      if (dark) root.setAttribute('data-theme', 'dark')
+      else root.removeAttribute('data-theme')
+      // 让窗口标题栏等原生控件也跟着变（Electron 支持）
+      try { window.electronAPI?.app.setTheme?.(dark ? 'dark' : 'light') } catch { /* 旧版本主进程无此接口 */ }
+    }
+    apply()
+    if (mode !== 'system' || !mq) return
+    const onChange = () => apply()
+    if (mq.addEventListener) mq.addEventListener('change', onChange)
+    else mq.addListener(onChange)
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange)
+      else mq.removeListener(onChange)
+    }
+  }, [(config as any).theme, (config as any).accent])
+
+  // 小窗口自适应：宽度不足 960 自动收起侧边栏（把空间让给内容区），
+  // 恢复到 1120 以上且之前是「自动收起」的才自动展开；用户手动收起的不动。
+  // 用独立的内存态（compactMode）驱动，不写入偏好配置，重启不受影响。
+  const [compactMode, setCompactMode] = useState(false)
+  const compactRef = useRef(false)
+  const autoCollapsedRef = useRef(false)
+  useEffect(() => {
+    const COLLAPSE_BELOW = 960
+    const RESTORE_ABOVE = 1120
+    let timer: number | null = null
+    const onResize = () => {
+      if (timer) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const w = window.innerWidth
+        if (w < COLLAPSE_BELOW && !compactRef.current) {
+          compactRef.current = true
+          autoCollapsedRef.current = true
+          setCompactMode(true)
+        } else if (w >= RESTORE_ABOVE && compactRef.current) {
+          compactRef.current = false
+          if (autoCollapsedRef.current) autoCollapsedRef.current = false
+          setCompactMode(false)
+        }
+      }, 120)
+    }
+    window.addEventListener('resize', onResize)
+    // 挂载时立即判断一次（避免小窗口打开时侧边栏先展开再收起的闪动）
+    onResize()
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [])
+
+  // 侧边栏开关（用户点击/快捷键共用）：compact 模式下点开 → 解除 compact；否则切换偏好
+  const toggleSidebarUnified = useCallback(() => {
+    const store = useAppStore.getState()
+    const collapsed = store.config.sidebarCollapsed || compactRef.current
+    if (collapsed) {
+      compactRef.current = false
+      autoCollapsedRef.current = false
+      setCompactMode(false)
+      if (store.config.sidebarCollapsed) store.setSidebarCollapsed(false)
+    } else {
+      autoCollapsedRef.current = false
+      store.setSidebarCollapsed(true)
+    }
+  }, [])
 
   useEffect(() => {
     if (!loaded) return
@@ -1159,12 +1342,20 @@ function App() {
     }
 
     const onKey = (e: KeyboardEvent) => {
+      // 正在输入时不响应快捷键，否则单键快捷键会把输入字符吞掉
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (target as any)?.isContentEditable) return
+
       const parts: string[] = []
       if (e.ctrlKey || e.metaKey) parts.push('ctrl')
       if (e.altKey) parts.push('alt')
       if (e.shiftKey) parts.push('shift')
       parts.push(e.key === ',' ? ',' : e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase())
       const combo = parts.join('+')
+      // 单键快捷键（无修饰键）在输入场景下一律不触发，避免影响正常打字
+      const hasModifier = e.ctrlKey || e.metaKey || e.altKey
+      if (!hasModifier && e.key.length === 1) return
       const action = comboMap[combo]
       if (!action) return
 
@@ -1176,19 +1367,19 @@ function App() {
       } else if (action === 'shortcutOpenSettings') {
         store.setShowSettings(!store.showSettings)
       } else if (action === 'shortcutToggleSidebar') {
-        store.setSidebarCollapsed(!store.config.sidebarCollapsed)
+        toggleSidebarUnified()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [loaded, showSettings, config.sidebarCollapsed, config.shortcutNewChat, config.shortcutOpenSettings, config.shortcutToggleSidebar])
+  }, [loaded, showSettings, config.sidebarCollapsed, config.shortcutNewChat, config.shortcutOpenSettings, config.shortcutToggleSidebar, toggleSidebarUnified])
 
   if (!loaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="w-12 h-12 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center mx-auto mb-3 animate-pulse">
-            <span className="text-white text-xl font-bold">M</span>
+            <span className="text-white text-xl font-bold">D</span>
           </div>
           <p className="text-gray-500 text-sm">Loading...</p>
         </div>
@@ -1203,9 +1394,8 @@ function App() {
       case 'automation': return <AutomationPage />
       case 'resources': return <ResourcesPage />
       case 'more': return <MorePage />
+      case 'aiTools': return <AIToolsPage />
       case 'tokenUsage': return <TokenUsagePage />
-      case 'aiIntro': return <AIIntroPage />
-      case 'taskWorkspace': return <TaskWorkspace onBack={() => useAppStore.getState().setActivePage('projects')} />
       default: return <ChatArea />
     }
   }
@@ -1213,13 +1403,24 @@ function App() {
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       <TitleBar />
+      {loadError && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs flex-shrink-0">
+          <AlertTriangle size={14} className="flex-shrink-0" />
+          <span className="flex-1 truncate">
+            本地数据加载失败，当前为默认配置；此状态下保存设置可能覆盖你的配置（{loadError}）
+          </span>
+          <button
+            onClick={() => useAppStore.setState({ loadError: null })}
+            className="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-900 flex-shrink-0"
+          >
+            知道了
+          </button>
+        </div>
+      )}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
-          collapsed={config.sidebarCollapsed}
-          onToggle={() => {
-            const store = useAppStore.getState()
-            store.setSidebarCollapsed(!store.config.sidebarCollapsed)
-          }}
+          collapsed={config.sidebarCollapsed || compactMode}
+          onToggle={toggleSidebarUnified}
           onSettings={() => useAppStore.getState().setShowSettings(true)}
         />
         {renderPage()}

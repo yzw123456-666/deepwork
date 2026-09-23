@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Minus, Square, X } from 'lucide-react'
+import AppLogo from './AppLogo'
 
 const TitleBar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false)
@@ -29,10 +30,8 @@ const TitleBar: React.FC = () => {
   return (
     <div className="titlebar flex items-center justify-between bg-white border-b border-gray-200 h-8 px-2 select-none">
       <div className="flex items-center gap-2 pl-2">
-        <div className="w-5 h-5 bg-gradient-to-br from-primary-400 to-primary-600 rounded flex items-center justify-center">
-          <span className="text-white text-xs font-bold">M</span>
-        </div>
-        <span className="text-sm font-medium text-gray-700">Many AI</span>
+        <AppLogo size={20} />
+        <span className="text-sm font-medium text-gray-700">deepwork</span>
         {version && <span className="text-xs text-gray-400">v{version}</span>}
       </div>
       <div className="flex items-center gap-0.5 titlebar-button">
@@ -52,7 +51,7 @@ const TitleBar: React.FC = () => {
               <rect x="0" y="2" width="8" height="8" rx="1" fill="white" stroke="currentColor" strokeWidth="1.2" />
             </svg>
           ) : (
-            <Square size={11} className="text-gray-600" />
+            <Square size={12} className="text-gray-700" />
           )}
         </button>
         <button

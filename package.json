@@ -1,9 +1,9 @@
 {
-  "name": "many-ai",
-  "version": "26.8.28.2034",
-  "description": "Many AI - 智能助手桌面应用",
+  "name": "deepwork",
+  "version": "26.9.44",
+  "description": "deepwork - 智能助手桌面应用",
   "main": "dist-electron/main.js",
-  "author": "Many AI Team",
+  "author": "deepwork Team",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

@@ -1,6 +1,6 @@
-# Many AI - Multi-Agent Desktop Application
+# deepwork - 桌面 AI 助手
 
-一个基于 Electron + React + TypeScript 的多智能体桌面应用，支持多模型协作完成复杂任务。
+一个基于 Electron + React + TypeScript 的桌面 AI 助手，支持多模型协作完成复杂任务。
 
 A Multi-Agent Desktop Application built with Electron + React + TypeScript, supporting multi-model collaboration for complex tasks.
 
@@ -133,9 +133,9 @@ In the Settings page, you can: / 在"设置"页面中可以：
 
 ## 📦 Download / 下载
 
-Go to [Releases](https://github.com/yzw123456-666/many-agent/releases) page to download the latest installer.
+Go to [Releases](https://github.com/yzw123456-666/deepwork/releases) page to download the latest installer.
 
-前往 [Releases](https://github.com/yzw123456-666/many-agent/releases) 页面下载最新安装包。
+前往 [Releases](https://github.com/yzw123456-666/deepwork/releases) 页面下载最新安装包。
 
 ---
 

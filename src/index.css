@@ -15,7 +15,8 @@ html, body, #root {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background-color: #f5f5f5;
+  background-color: var(--c-25);
+  color: var(--c-900);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -31,12 +32,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--c-200);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: var(--c-300);
 }
 
 /* Title bar drag area */
@@ -132,3 +133,177 @@ body {
 .animate-slide-in {
   animation: slideIn 0.2s ease-out;
 }
+
+/* ================= 主题系统 =================
+   设计原则：主题色（--h）决定整体色相，明度决定深浅，饱和度决定「白底」被染多少色。
+   因此切换主题色时，连原本纯白的卡片、输入框、侧边栏都会带上该色系的淡淡色调，
+   而不只是按钮变颜色。
+
+   --h   色相（0-360）、--s 饱和度、--cs 「白底」染色饱和度（比主色低，保证可读性）
+   --n   中性色相（跟随主题色，让灰阶也带一点色温） */
+
+:root {
+  /* 天蓝（默认） */
+  --h: 199; --cs: 30%; --n: 210;
+}
+[data-accent="deepblue"] { --h: 221; --cs: 32%; --n: 222; }
+[data-accent="navy"]     { --h: 232; --cs: 28%; --n: 230; }
+[data-accent="violet"]   { --h: 262; --cs: 30%; --n: 262; }
+[data-accent="emerald"]  { --h: 160; --cs: 28%; --n: 168; }
+[data-accent="teal"]     { --h: 174; --cs: 30%; --n: 180; }
+[data-accent="rose"]     { --h: 350; --cs: 30%; --n: 350; }
+[data-accent="amber"]    { --h: 24;  --cs: 34%; --n: 32;  }
+[data-accent="lime"]     { --h: 88;  --cs: 30%; --n: 96;  }
+
+/* 强调色（按钮、高亮、链接、开关）——饱和度拉满 */
+:root,
+[data-accent] {
+  --p-50:  hsl(var(--h) 70% 97.5%);
+  --p-100: hsl(var(--h) 72% 94.5%);
+  --p-200: hsl(var(--h) 74% 88%);
+  --p-300: hsl(var(--h) 85% 76%);
+  --p-400: hsl(var(--h) 82% 64%);
+  --p-500: hsl(var(--h) 80% 52%);
+  --p-600: hsl(var(--h) 78% 44%);
+  --p-700: hsl(var(--h) 76% 35%);
+  --p-800: hsl(var(--h) 74% 27%);
+  --p-900: hsl(var(--h) 72% 20%);
+}
+
+/* 中性色阶：白底「被染色」的核心——所有原来的白/浅灰都带主题色温 */
+:root,
+[data-accent] {
+  --c-0:    hsl(var(--n) var(--cs) 99%);   /* 卡片 / 面板（比页面底色更亮，靠色温而非纯白区分） */
+  --c-25:   hsl(var(--n) var(--cs) 98%);                                    /* 页面底色 */
+  --c-50:   hsl(var(--n) var(--cs) 96.5%);
+  --c-100:  hsl(var(--n) calc(var(--cs) + 4%) 94%);
+  --c-200:  hsl(var(--n) calc(var(--cs) + 6%) 90%);
+  --c-300:  hsl(var(--n) calc(var(--cs) + 6%) 84%);
+  --c-400:  hsl(var(--n) 18% 67%);
+  --c-500:  hsl(var(--n) 15% 58%);
+  --c-600:  hsl(var(--n) 15% 47%);
+  --c-700:  hsl(var(--n) 17% 37%);
+  --c-800:  hsl(var(--n) 20% 22%);
+  --c-900:  hsl(var(--n) 22% 14%);
+  --c-950:  hsl(var(--n) 24% 10%);
+  --c-border:        hsl(var(--n) calc(var(--cs) + 4%) 89%);
+  --c-border-strong: hsl(var(--n) calc(var(--cs) + 6%) 82%);
+}
+
+/* 主题色系的整体染色（标题栏、顶栏、输入区、气泡）
+   —— 让主题色跳出「只有按钮变色」，形成统一的色彩氛围 */
+[data-accent] .bg-gray-50 { background-color: var(--c-25) !important; }
+[data-accent] .bg-white { background-color: var(--c-0) !important; }
+[data-accent] .bg-gray-100 { background-color: var(--c-50) !important; }
+[data-accent] .bg-gray-200 { background-color: var(--c-100) !important; }
+
+/* ---------- 深色模式：色相不变，明度压暗且带主题色温 ---------- */
+[data-theme="dark"] {
+  --cs: 22%;
+  --c-0:    hsl(var(--n) var(--cs) 13.5%);  /* 卡片 */
+  --c-25:   hsl(var(--n) calc(var(--cs) + 4%) 10.5%); /* 页面底色 */
+  --c-50:   hsl(var(--n) calc(var(--cs) + 2%) 16.5%);
+  --c-100:  hsl(var(--n) calc(var(--cs) + 3%) 20%);
+  --c-200:  hsl(var(--n) calc(var(--cs) + 4%) 24%);
+  --c-300:  hsl(var(--n) calc(var(--cs) + 4%) 30%);
+  --c-400:  hsl(var(--n) 12% 52%);
+  --c-500:  hsl(var(--n) 12% 62%);
+  --c-600:  hsl(var(--n) 12% 72%);
+  --c-700:  hsl(var(--n) 12% 80%);
+  --c-800:  hsl(var(--n) 10% 88%);
+  --c-900:  hsl(var(--n) 8% 94%);
+  --c-950:  hsl(var(--n) 8% 97%);
+  --c-border:        hsl(var(--n) calc(var(--cs) + 3%) 21%);
+  --c-border-strong: hsl(var(--n) calc(var(--cs) + 4%) 28%);
+  --p-50:  hsl(var(--h) calc(var(--cs) + 6%) 16%);
+  --p-100: hsl(var(--h) calc(var(--cs) + 8%) 21%);
+  --p-200: hsl(var(--h) calc(var(--cs) + 6%) 28%);
+  color-scheme: dark;
+}
+
+[data-theme="dark"] body {
+  background-color: var(--c-25);
+  color: var(--c-900);
+}
+
+/* 未显式指定边框颜色的元素跟随主题（:where 不提升优先级，不误伤具体类） */
+:where(*) { border-color: var(--c-border); }
+
+/* ---------- 背景层映射 ---------- */
+.bg-white { background-color: var(--c-0) !important; }
+.bg-gray-50 { background-color: var(--c-25) !important; }
+.bg-gray-100 { background-color: var(--c-50) !important; }
+.bg-gray-200 { background-color: var(--c-100) !important; }
+.bg-gray-300 { background-color: var(--c-200) !important; }
+.bg-gray-400 { background-color: var(--c-300) !important; }
+.bg-gray-500 { background-color: var(--c-400) !important; }
+.bg-gray-600 { background-color: var(--c-500) !important; }
+.bg-gray-700 { background-color: var(--c-700) !important; }
+.bg-gray-800 { background-color: var(--c-800) !important; }
+.bg-gray-900 { background-color: var(--c-900) !important; }
+
+/* ---------- 文字映射 ---------- */
+.text-black, .text-gray-900 { color: var(--c-900) !important; }
+.text-gray-800 { color: var(--c-900) !important; }
+.text-gray-700 { color: var(--c-800) !important; }
+.text-gray-600 { color: var(--c-700) !important; }
+.text-gray-500 { color: var(--c-600) !important; }
+.text-gray-400 { color: var(--c-400) !important; }
+.text-gray-300 { color: var(--c-300) !important; }
+
+/* ---------- 边框映射 ---------- */
+.border-gray-100 { border-color: hsl(var(--n) calc(var(--cs) + 2%) 92%) !important; }
+.border-gray-200 { border-color: var(--c-border) !important; }
+.border-gray-300 { border-color: var(--c-border-strong) !important; }
+[data-theme="dark"] .border-gray-100 { border-color: var(--c-border) !important; }
+
+/* ---------- 悬停态 ---------- */
+.hover\:bg-gray-50:hover { background-color: var(--c-50) !important; }
+.hover\:bg-gray-100:hover { background-color: var(--c-100) !important; }
+.hover\:bg-gray-200:hover { background-color: var(--c-200) !important; }
+.hover\:text-gray-700:hover { color: var(--c-800) !important; }
+.hover\:text-gray-800:hover { color: var(--c-900) !important; }
+.hover\:text-gray-900:hover { color: var(--c-950) !important; }
+.hover\:border-gray-300:hover { border-color: var(--c-border-strong) !important; }
+
+/* ---------- 输入类元素：浏览器默认白底必须被染色 ---------- */
+input, textarea, select {
+  background-color: var(--c-0);
+  color: var(--c-900);
+  border-color: var(--c-border);
+}
+input::placeholder, textarea::placeholder { color: var(--c-400); }
+input:focus, textarea:focus, select:focus { outline: none; }
+input[type="range"] { background-color: transparent; }
+select option { background-color: var(--c-0); color: var(--c-900); }
+
+/* ---------- 分隔线 / 滚动条 ---------- */
+.divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--c-border); }
+::-webkit-scrollbar-thumb { background: var(--c-200); }
+::-webkit-scrollbar-thumb:hover { background: var(--c-300); }
+
+/* ---------- Markdown 正文 ---------- */
+.markdown-content blockquote { border-left-color: var(--c-border-strong); color: var(--c-600); }
+.markdown-content th, .markdown-content td { border-color: var(--c-border); }
+.markdown-content th { background-color: var(--c-50); }
+[data-theme="dark"] .markdown-content pre { background-color: hsl(var(--n) 22% 8%) !important; }
+
+/* ---------- 渐变色块（Logo / 头像）跟随主题色相 ---------- */
+.from-primary-400 { --tw-gradient-from: hsl(var(--h) 82% 64%) var(--tw-gradient-from-position); }
+.to-primary-600 { --tw-gradient-to: hsl(var(--h) 78% 44%) var(--tw-gradient-to-position); }
+.from-primary-500 { --tw-gradient-from: hsl(var(--h) 80% 52%) var(--tw-gradient-from-position); }
+.to-primary-700 { --tw-gradient-to: hsl(var(--h) 76% 35%) var(--tw-gradient-to-position); }
+
+/* ---------- 彩色状态色在深色下降低亮度，避免刺眼 ---------- */
+[data-theme="dark"] .bg-blue-100 { background-color: hsl(217 35% 22%) !important; }
+[data-theme="dark"] .text-blue-600 { color: hsl(217 70% 68%) !important; }
+[data-theme="dark"] .bg-green-100 { background-color: hsl(152 30% 20%) !important; }
+[data-theme="dark"] .text-green-600 { color: hsl(152 55% 62%) !important; }
+[data-theme="dark"] .bg-red-100 { background-color: hsl(0 35% 22%) !important; }
+[data-theme="dark"] .text-red-600 { color: hsl(0 70% 68%) !important; }
+[data-theme="dark"] .bg-amber-50, [data-theme="dark"] .bg-amber-100 { background-color: hsl(38 35% 21%) !important; }
+[data-theme="dark"] .text-amber-600 { color: hsl(38 75% 62%) !important; }
+[data-theme="dark"] .bg-primary-50 { background-color: var(--p-50) !important; }
+[data-theme="dark"] .text-primary-600 { color: var(--p-300) !important; }
+[data-theme="dark"] .bg-primary-100 { background-color: var(--p-100) !important; }

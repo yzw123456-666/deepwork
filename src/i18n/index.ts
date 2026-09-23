@@ -5,7 +5,7 @@ const resources = {
   zh: {
     translation: {
       app: {
-        title: 'Many AI',
+        title: 'deepwork',
         subtitle: '我帮你',
         version: 'v1.0.0',
       },
@@ -20,7 +20,7 @@ const resources = {
         settings: '设置',
       },
       chat: {
-        placeholder: '今天帮你做些什么？输入消息开始对话...',
+        placeholder: '今天帮你做些什么？',
         send: '发送',
         thinking: '思考中...',
         stop: '停止生成',
@@ -44,7 +44,7 @@ const resources = {
         about: '关于我们',
         agentSystemPrompt: '系统提示词',
         agentSystemPromptDesc: '发送给模型的系统级指令，设定 AI 的角色与行为。',
-        agentSystemPromptPlaceholder: '例如：你是一个专业的编程助手，回答简洁准确。',
+        agentSystemPromptPlaceholder: '留空使用默认提示词。例如：你是一个专业的编程助手，回答简洁准确。',
         agentTemperature: '回复随机性 (Temperature)',
         agentTemperatureLow: '严谨',
         agentTemperatureHigh: '发散',
@@ -92,7 +92,6 @@ const resources = {
         editModel: '编辑模型',
         deleteModel: '删除模型',
         deleteConfirm: '确定要删除这个模型吗？此操作不可撤销。',
-        provider: '提供商',
         apiKey: 'API Key',
         apiKeyPlaceholder: '输入你的 API Key',
         modelName: '模型名称',
@@ -106,7 +105,7 @@ const resources = {
         customProtocol: '自定义协议',
         inputPrice: '输入价格',
         outputPrice: '输出价格',
-        useDefault: '使用提供商默认值',
+        useDefault: '使用默认值',
         save: '保存',
         cancel: '取消',
         openaiCompatible: '仅支持 OpenAI 兼容协议 API',
@@ -129,7 +128,7 @@ const resources = {
         video: '视频生成',
       },
       welcome: {
-        greeting: '你好，我是 Many AI',
+        greeting: '你好，我是 deepwork',
         subtitle: '你的 AI 智能助手',
         description: '我可以帮你完成各种任务，包括代码编写、文档处理、数据分析等。',
       },
@@ -138,7 +137,7 @@ const resources = {
   en: {
     translation: {
       app: {
-        title: 'Many AI',
+        title: 'deepwork',
         subtitle: 'I help you',
         version: 'v1.0.0',
       },
@@ -177,7 +176,7 @@ const resources = {
         about: 'About Us',
         agentSystemPrompt: 'System Prompt',
         agentSystemPromptDesc: 'System-level instruction sent to the model to define its role and behavior.',
-        agentSystemPromptPlaceholder: 'e.g. You are a professional coding assistant. Answer concisely and accurately.',
+        agentSystemPromptPlaceholder: 'Leave empty to use the default prompt. e.g. You are a professional coding assistant.',
         agentTemperature: 'Temperature (Randomness)',
         agentTemperatureLow: 'Precise',
         agentTemperatureHigh: 'Creative',
@@ -225,7 +224,6 @@ const resources = {
         editModel: 'Edit Model',
         deleteModel: 'Delete Model',
         deleteConfirm: 'Are you sure you want to delete this model? This action cannot be undone.',
-        provider: 'Provider',
         apiKey: 'API Key',
         apiKeyPlaceholder: 'Enter your API Key',
         modelName: 'Model Name',
@@ -239,7 +237,7 @@ const resources = {
         customProtocol: 'Custom Protocol',
         inputPrice: 'Input Price',
         outputPrice: 'Output Price',
-        useDefault: 'Use provider defaults',
+        useDefault: 'Use defaults',
         save: 'Save',
         cancel: 'Cancel',
         openaiCompatible: 'Only supports OpenAI compatible API',
@@ -262,7 +260,7 @@ const resources = {
         video: 'Video Generation',
       },
       welcome: {
-        greeting: 'Hello, I am Many AI',
+        greeting: 'Hello, I am deepwork',
         subtitle: 'Your AI Assistant',
         description: 'I can help you with various tasks including coding, document processing, data analysis, and more.',
       },

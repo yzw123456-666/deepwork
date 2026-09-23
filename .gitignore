@@ -29,3 +29,10 @@ pnpm-debug.log*
 *.swp
 *.swo
 *~
+
+# 调试临时文件（排查用，不入库）
+shot-*.png
+tmp-frames*/
+pw-*.txt
+proc-dump.txt
+*-dump.txt

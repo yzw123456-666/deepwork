@@ -1,6 +1,6 @@
-appId: com.manyai.agent
-productName: Many AI
-copyright: Copyright © 2024 Many AI Team
+appId: com.deepwork.agent
+productName: deepwork
+copyright: Copyright © 2024 deepwork
 
 directories:
   output: C:/manyai-build/release
@@ -16,6 +16,8 @@ asar: false
 extraResources:
   - from: plugins
     to: plugins
+  - from: resources/icon.png
+    to: icon.png
 
 win:
   target:
@@ -31,7 +33,7 @@ nsis:
   deleteAppDataOnUninstall: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Many AI
+  shortcutName: deepwork
   language: 2052
 
 portable:

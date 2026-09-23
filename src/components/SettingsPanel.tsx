@@ -13,6 +13,7 @@ import {
   Edit2,
   Trash2,
   Monitor,
+  MessageSquare,
   Globe,
   AlertTriangle,
   RotateCcw,
@@ -28,10 +29,16 @@ import {
   CheckCircle,
   RefreshCw,
   Plus,
+  Brain,
+  Sun,
+  Moon,
 } from 'lucide-react'
 import { useAppStore } from '../stores'
-import { Model } from '../types'
+import { Model, MemoryEntry } from '../types'
+import AppLogo from './AppLogo'
 import AddModelDialog from './AddModelDialog'
+import ModelManager from './ModelManager'
+import { v4 as uuidv4 } from 'uuid'
 
 interface SettingsPanelProps {
   onClose: () => void
@@ -70,6 +77,80 @@ const SettingRow: React.FC<{
 
 const Card: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="bg-white border border-gray-200 rounded-xl px-4 py-1 mb-4">{children}</div>
+)
+
+/* ---------- 主题选择（浅色 / 深色 / 跟随系统） ---------- */
+const ThemePicker: React.FC<{ value: string; onChange: (v: 'light' | 'dark' | 'system') => void }> = ({ value, onChange }) => {
+  const opts = [
+    { id: 'light' as const, label: '浅色模式', icon: Sun },
+    { id: 'dark' as const, label: '深色模式', icon: Moon },
+    { id: 'system' as const, label: '跟随系统', icon: Monitor },
+  ]
+  return (
+    <div className="py-3 flex gap-3 flex-wrap">
+      {opts.map((o) => {
+        const active = value === o.id
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
+              active
+                ? 'border-primary-300 text-primary-600 bg-primary-50'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <o.icon size={16} />
+            <span>{o.label}</span>
+            {active && <CheckCircle size={14} className="ml-0.5" />}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ---------- 主题色选择（accent） ----------
+   预览块同时展示「强调色」与「被染色的浅底」，让用户直观看到整个界面的色彩氛围 */
+const ACCENTS: Array<{ id: 'sky' | 'deepblue' | 'navy' | 'violet' | 'emerald' | 'teal' | 'lime' | 'rose' | 'amber'; label: string; hue: number }> = [
+  { id: 'sky', label: '天蓝', hue: 199 },
+  { id: 'deepblue', label: '深蓝', hue: 221 },
+  { id: 'navy', label: '海军蓝', hue: 232 },
+  { id: 'violet', label: '紫罗兰', hue: 262 },
+  { id: 'emerald', label: '翡翠绿', hue: 160 },
+  { id: 'teal', label: '青碧', hue: 174 },
+  { id: 'lime', label: '浅绿', hue: 88 },
+  { id: 'rose', label: '玫红', hue: 350 },
+  { id: 'amber', label: '琥珀橙', hue: 24 },
+]
+
+const AccentPicker: React.FC<{ value: string; onChange: (v: typeof ACCENTS[number]['id']) => void }> = ({ value, onChange }) => (
+  <div className="py-3 grid grid-cols-3 gap-2.5">
+    {ACCENTS.map((a) => {
+      const active = (value || 'sky') === a.id
+      return (
+        <button
+          key={a.id}
+          onClick={() => onChange(a.id)}
+          className={`flex items-center gap-2.5 px-2.5 py-2 rounded-xl border transition-colors text-left ${
+            active ? 'border-gray-400 bg-gray-50' : 'border-gray-200 hover:bg-gray-50'
+          }`}
+        >
+          {/* 色块：上半强调色 + 下半染色浅底。下半用 45% 饱和 / 86% 亮度并加描边，
+              保证与卡片底色（99% 亮度）有足够对比，不会被"吞掉"显得残缺 */}
+          <span
+            className="w-7 h-7 rounded-lg flex-shrink-0 overflow-hidden"
+            style={{
+              background: `linear-gradient(to bottom, hsl(${a.hue} 82% 52%) 0 55%, hsl(${a.hue} 45% 86%) 55% 100%)`,
+              border: '1px solid var(--c-border-strong)',
+            }}
+          />
+          <span className="text-xs text-gray-700 truncate">{a.label}</span>
+          {active && <CheckCircle size={13} className="ml-auto flex-shrink-0 text-gray-500" />}
+        </button>
+      )
+    })}
+  </div>
 )
 
 const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -143,7 +224,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({ item, level = 0, expandedDirs, togg
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const { t, i18n } = useTranslation()
-  const { models, addModel, updateModel, deleteModel, setConfig, config, updateAICapability, aiCapabilities } = useAppStore()
+  const { models, addModel, updateModel, deleteModel, setConfig, config } = useAppStore()
+  const { globalMemory, addMemory, deleteMemory, clearMemory, searchMemory } = useAppStore()
   const [activeTab, setActiveTab] = useState('models')
   const [showAddModel, setShowAddModel] = useState(false)
   const [editingModel, setEditingModel] = useState<Model | null>(null)
@@ -152,6 +234,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [appVersion, setAppVersion] = useState('')
   const [sandboxSection, setSandboxSection] = useState<string | null>(null)
+  // 记忆页
+  const [memoryQuery, setMemoryQuery] = useState('')
+  const [memoryDraft, setMemoryDraft] = useState({ summary: '', keywords: '', files: '', outcome: 'success' as MemoryEntry['outcome'] })
+  const [memoryBusy, setMemoryBusy] = useState(false)
 
   useEffect(() => {
     window.electronAPI?.app.getInfo().then((info: any) => {
@@ -162,13 +248,19 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   // 加载目录树
   const loadDirTree = async () => {
     if (window.electronAPI) {
-      const info = await window.electronAPI.app.getInfo()
-      const tree = await window.electronAPI.fs.readDirTree(info.userDataPath)
-      setDirTree(tree)
-      // 默认展开 conversations 目录
-      const convDir = tree.find((item: any) => item.name === 'conversations')
-      if (convDir) {
-        setExpandedDirs(new Set([convDir.path]))
+      try {
+        const info = await window.electronAPI.app.getInfo()
+        const tree = await window.electronAPI.fs.readDirTree(info.userDataPath)
+        const list = Array.isArray(tree) ? tree : []
+        setDirTree(list)
+        // 默认展开 conversations 目录
+        const convDir = list.find((item: any) => item.name === 'conversations')
+        if (convDir) {
+          setExpandedDirs(new Set([convDir.path]))
+        }
+      } catch (e) {
+        console.error('loadDirTree failed:', e)
+        setDirTree([])
       }
     }
   }
@@ -196,6 +288,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
     { id: 'agent', icon: Bot, label: t('settings.agent') },
     { id: 'personalization', icon: Palette, label: t('settings.personalization') },
     { id: 'models', icon: Database, label: t('settings.models') },
+    { id: 'memory', icon: Brain, label: '长期记忆' },
     { id: 'data', icon: HardDrive, label: t('settings.data') },
     { id: 'shortcuts', icon: Keyboard, label: t('settings.shortcuts') },
     { id: 'security', icon: Shield, label: t('settings.security') },
@@ -206,64 +299,18 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const handleAddModel = async (model: Model) => {
     await addModel(model)
     setShowAddModel(false)
-
-    // 自动能力询问：添加 API 后自动问 AI 擅长什么（用户没手填时）
-    if (!model.capability?.trim()) {
-      const { probeCapability } = await import('../services/agentEngine')
-      const probe = await probeCapability(model)
-      if (probe) {
-        updateModel(model.id, {
-          capability: probe.strengths.join('、'),
-        })
-        updateAICapability(model.id, {
-          strengths: probe.strengths,
-          weaknesses: probe.weaknesses,
-          rating: probe.rating,
-          autoAssessed: true,
-        })
-      }
-    }
   }
 
   const handleEditModel = async (model: Model) => {
     await updateModel(model.id, model)
     setEditingModel(null)
     setShowAddModel(false)
-
-    // 编辑时如果清空了能力描述，重新自动询问
-    if (!model.capability?.trim() && model.enabled) {
-      const { probeCapability } = await import('../services/agentEngine')
-      const probe = await probeCapability(model)
-      if (probe) {
-        await updateModel(model.id, { capability: probe.strengths.join('、') })
-        updateAICapability(model.id, {
-          strengths: probe.strengths,
-          weaknesses: probe.weaknesses,
-          rating: probe.rating,
-          autoAssessed: true,
-        })
-      }
-    }
   }
 
   const handleDeleteModel = async (modelId: string) => {
     if (!config.confirmBeforeDelete || window.confirm(t('models.deleteConfirm'))) {
       await deleteModel(modelId)
     }
-  }
-
-  const getProviderName = (provider: string): string => {
-    const names: Record<string, string> = {
-      zhipu: '智谱开放平台',
-      'zhipu-coding': '智谱 Coding Plan',
-      tencent: '腾讯云 Token Plan',
-      kimi: 'Kimi Coding Plan',
-      deepseek: 'DeepSeek',
-      ollama: 'Ollama',
-      openai: 'OpenAI',
-      custom: '自定义',
-    }
-    return names[provider] || provider
   }
 
   const handleLanguageChange = (lang: 'zh' | 'en') => {
@@ -303,11 +350,63 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   /* ---------- 安全中心 ---------- */
   const handleClearAllData = async () => {
     if (!window.confirm(t('settings.clearAllDataConfirm'))) return
-    await window.electronAPI?.app.clearAllData()
+    // 必须在确认清盘成功后再 reload：静默失败会让人误以为数据已清（实际还在）
+    try {
+      const ok = await window.electronAPI?.app.clearAllData()
+      // 开发模式（无 electronAPI）下清 localStorage；Electron 模式下不动 localStorage
+      if (!window.electronAPI) {
+        for (const k of ['manyai_models', 'manyai_tasks', 'manyai_convs', 'manyai_config', 'manyai_tokenUsage', 'manyai_memory']) {
+          localStorage.removeItem(k)
+        }
+      } else if (ok === false) {
+        window.alert('清除失败：部分文件可能被占用，请关闭相关程序后重试。')
+        return
+      }
+    } catch (e) {
+      console.error('clearAllData failed:', e)
+      window.alert('清除失败，请查看控制台日志。')
+      return
+    }
     window.location.reload()
   }
 
   const cfg = config as Record<string, any>
+
+  /* ---------- 长期记忆 ---------- */
+  const fmtMemoryDate = (ts: number) => {
+    const d = new Date(ts)
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  }
+
+  const memoryList = memoryQuery.trim()
+    ? searchMemory(memoryQuery.trim())
+    : globalMemory
+
+  const handleAddMemory = async () => {
+    const summary = memoryDraft.summary.trim()
+    if (!summary) return
+    setMemoryBusy(true)
+    try {
+      await addMemory({
+        id: uuidv4(),
+        timestamp: Date.now(),
+        summary,
+        keywords: memoryDraft.keywords.split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 8),
+        files: memoryDraft.files.split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 6),
+        outcome: memoryDraft.outcome,
+      })
+      setMemoryDraft({ summary: '', keywords: '', files: '', outcome: 'success' })
+    } catch (e) {
+      console.error('addMemory failed:', e)
+    }
+    setMemoryBusy(false)
+  }
+
+  const handleClearMemory = async () => {
+    if (!window.confirm(`确定清空全部 ${globalMemory.length} 条记忆？此操作不可撤销。`)) return
+    await clearMemory()
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
@@ -351,77 +450,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             {/* Models Tab */}
             {activeTab === 'models' && (
               <div>
-                <button
-                  onClick={() => { setEditingModel(null); setShowAddModel(true) }}
-                  className="mb-4 flex items-center gap-1.5 px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition-colors"
-                >
-                  <Plus size={14} />
-                  添加模型
-                </button>
-
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  {/* 表头 */}
-                  <div className="flex items-center px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500">
-                    <span className="flex-1">模型</span>
-                    <span className="w-20 text-center">参数量</span>
-                    <span className="w-44">服务商</span>
-                    <span className="w-28 text-right">操作</span>
-                  </div>
-
-                  {models.length === 0 ? (
-                    <div className="text-center py-10">
-                      <p className="text-gray-400 text-sm">暂无模型，点击上方"添加模型"开始</p>
-                    </div>
-                  ) : (
-                    models.map((model, index) => {
-                      const providerIcon: Record<string, string> = {
-                        zhipu: '⊕', 'zhipu-coding': '⊕', tencent: '☁', kimi: '◆',
-                        deepseek: '♦', ollama: '⚙', openai: '○', custom: '✏',
-                      }
-                      return (
-                        <div
-                          key={model.id}
-                          className={`flex items-center px-4 py-2.5 hover:bg-gray-50 transition-colors ${
-                            index < models.length - 1 ? 'border-b border-gray-100' : ''
-                          }`}
-                        >
-                          <div className="flex-1 flex items-center gap-2.5 min-w-0">
-                            <span className="text-gray-500 text-base w-5 text-center flex-shrink-0">
-                              {providerIcon[model.provider] || '•'}
-                            </span>
-                            <span className="text-sm text-gray-800 truncate">{model.name}</span>
-                          </div>
-                          <span className="w-20 text-center text-xs text-gray-500">
-                            {model.parameterSize || '-'}
-                          </span>
-                          <span className="w-44 text-sm text-gray-500 truncate">
-                            {getProviderName(model.provider)}
-                          </span>
-                          <div className="w-28 flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => { setEditingModel(model); setShowAddModel(true) }}
-                              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                              title="编辑"
-                            >
-                              <Edit2 size={13} />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteModel(model.id)}
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                              title="删除"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                            <Toggle
-                              checked={model.enabled}
-                              onChange={(v) => updateModel(model.id, { enabled: v })}
-                            />
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
+                <ModelManager />
 
                 {/* 单模型任务备用模型 */}
                 <div className="mt-4 bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between">
@@ -441,6 +470,141 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                     ))}
                   </select>
                 </div>
+              </div>
+            )}
+
+            {/* 长期记忆 Tab */}
+            {activeTab === 'memory' && (
+              <div className="max-w-2xl">
+                <SectionTitle>长期记忆</SectionTitle>
+                <Card>
+                  <SettingRow title="启用长期记忆" desc="对话与任务开始执行前，自动检索相关历史记忆并注入提示词">
+                    <Toggle
+                      checked={cfg.memoryEnabled !== false}
+                      onChange={(v) => setConfig({ memoryEnabled: v })}
+                    />
+                  </SettingRow>
+                  <SettingRow title="任务完成后自动沉淀" desc="任务成功结束时，让模型把本次成果压缩成一条记忆（会多一次模型调用）">
+                    <Toggle
+                      checked={cfg.autoMemory !== false}
+                      onChange={(v) => setConfig({ autoMemory: v })}
+                    />
+                  </SettingRow>
+                </Card>
+
+                <SectionTitle>手动添加</SectionTitle>
+                <Card>
+                  <div className="py-3 space-y-3">
+                    <textarea
+                      value={memoryDraft.summary}
+                      onChange={(e) => setMemoryDraft({ ...memoryDraft, summary: e.target.value })}
+                      placeholder="一句话记录要长期记住的事实，例如：创建了五子棋项目，入口是 index.html"
+                      rows={3}
+                      className="w-full resize-none px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary-300"
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        value={memoryDraft.keywords}
+                        onChange={(e) => setMemoryDraft({ ...memoryDraft, keywords: e.target.value })}
+                        placeholder="关键词，逗号分隔：五子棋,Canvas"
+                        className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary-300"
+                      />
+                      <input
+                        value={memoryDraft.files}
+                        onChange={(e) => setMemoryDraft({ ...memoryDraft, files: e.target.value })}
+                        placeholder="相关文件，逗号分隔（可选）"
+                        className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary-300"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <select
+                        value={memoryDraft.outcome}
+                        onChange={(e) => setMemoryDraft({ ...memoryDraft, outcome: e.target.value as MemoryEntry['outcome'] })}
+                        className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:border-primary-300"
+                      >
+                        <option value="success">成功</option>
+                        <option value="partial">部分完成</option>
+                        <option value="failed">失败</option>
+                      </select>
+                      <button
+                        onClick={handleAddMemory}
+                        disabled={memoryBusy || !memoryDraft.summary.trim()}
+                        className="px-4 py-1.5 bg-primary-500 text-white text-sm rounded-lg hover:bg-primary-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      >
+                        <Plus size={14} /> 添加记忆
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+
+                <SectionTitle>已有记忆（{globalMemory.length} / 200）</SectionTitle>
+                <div className="relative mb-3">
+                  <input
+                    value={memoryQuery}
+                    onChange={(e) => setMemoryQuery(e.target.value)}
+                    placeholder="搜索记忆（摘要 / 关键词 / 文件）"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-primary-300"
+                  />
+                </div>
+                {memoryList.length === 0 ? (
+                  <Card>
+                    <div className="py-8 text-center text-sm text-gray-400">
+                      {globalMemory.length === 0 ? '还没有任何记忆，完成任务或手动添加后会出现在这里' : '没有匹配的记忆'}
+                    </div>
+                  </Card>
+                ) : (
+                  <div className="space-y-2">
+                    {memoryList.map((m) => (
+                      <Card key={m.id}>
+                        <div className="py-3 px-4">
+                          <div className="flex items-start gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className="text-xs text-gray-400">{fmtMemoryDate(m.timestamp)}</span>
+                                {m.taskName && (
+                                  <span className="text-[11px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded truncate max-w-[220px]">{m.taskName}</span>
+                                )}
+                                <span className={`text-[11px] px-1.5 py-0.5 rounded ${
+                                  m.outcome === 'success' ? 'bg-green-50 text-green-600'
+                                  : m.outcome === 'partial' ? 'bg-amber-50 text-amber-600'
+                                  : 'bg-red-50 text-red-600'
+                                }`}>
+                                  {m.outcome === 'success' ? '成功' : m.outcome === 'partial' ? '部分完成' : '失败'}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-800 break-words">{m.summary}</p>
+                              {m.keywords?.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {m.keywords.map((k, i) => (
+                                    <span key={i} className="text-[11px] px-1.5 py-0.5 bg-primary-50 text-primary-600 rounded">{k}</span>
+                                  ))}
+                                </div>
+                              )}
+                              {m.files?.length > 0 && (
+                                <p className="text-[11px] text-gray-400 mt-1 truncate">文件：{m.files.join('、')}</p>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => deleteMemory(m.id)}
+                              title="删除这条记忆"
+                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors flex-shrink-0"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+                {globalMemory.length > 0 && (
+                  <button
+                    onClick={handleClearMemory}
+                    className="mt-4 px-4 py-2 text-sm text-red-500 border border-red-200 rounded-lg hover:bg-red-50 flex items-center gap-1.5"
+                  >
+                    <Trash2 size={14} /> 清空全部记忆
+                  </button>
+                )}
               </div>
             )}
 
@@ -586,10 +750,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
                 <SectionTitle>外观</SectionTitle>
                 <Card>
-                  <div className="py-3 flex gap-3">
-                    <button className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-white border-primary-300 text-primary-600">
-                      <Monitor size={16} /><span>浅色模式</span>
-                    </button>
+                  <ThemePicker value={cfg.theme ?? 'light'} onChange={(v) => setConfig({ theme: v })} />
+                  <div className="px-1 pb-1">
+                    <p className="text-xs text-gray-400">切换后立即生效，并持久化到配置文件。</p>
+                  </div>
+                </Card>
+
+                <SectionTitle>主题色</SectionTitle>
+                <Card>
+                  <AccentPicker value={cfg.accent ?? 'sky'} onChange={(v) => setConfig({ accent: v })} />
+                  <div className="px-1 pb-3 -mt-1">
+                    <p className="text-xs text-gray-400">决定整个界面的色相：按钮、高亮、链接以及原本的白色底色都会被该色系晕染，只是深浅不同。与深浅色模式叠加生效。</p>
                   </div>
                 </Card>
               </div>
@@ -652,14 +823,14 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                       <div className="flex items-center gap-2">
                         <Shield size={18} className="text-primary-500" />
                         <h3 className="text-sm font-medium text-gray-800">沙箱安全</h3>
-                        <HelpCircle size={14} className="text-gray-400" />
+                        <span title="文件 / 命令 / 网络三类策略分别控制 AI 的访问范围" className="inline-flex"><HelpCircle size={15} className="text-gray-500" /></span>
                       </div>
                       <Toggle
                         checked={(cfg as any).sandboxEnabled ?? true}
                         onChange={(v) => setConfig({ sandboxEnabled: v })}
                       />
                     </div>
-                    <p className="text-xs text-gray-500 mb-3">AI 运行于隔离沙箱，并配置文件、命令、网络访问策略</p>
+                    <p className="text-xs text-gray-500 mb-3">AI 运行于隔离沙箱，并按下方名单管控文件、命令与网络访问；总开关关闭时全部放行</p>
 
                     {/* Sub-items */}
                     <div className="space-y-0 border-t border-gray-100">
@@ -673,7 +844,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                             <FileText size={14} className="text-gray-500" />
                             <div className="text-left">
                               <div className="text-sm text-gray-700">文件安全</div>
-                              <div className="text-xs text-gray-400">为沙箱拦截后的文件路径配置白名单和黑名单</div>
+                              <div className="text-xs text-gray-400">黑名单路径禁止读写改删；同时列入白名单的路径视为例外放行</div>
                             </div>
                           </div>
                           <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'file' ? 'rotate-90' : ''}`} />
@@ -713,7 +884,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                             <Terminal size={14} className="text-gray-500" />
                             <div className="text-left">
                               <div className="text-sm text-gray-700">命令安全</div>
-                              <div className="text-xs text-gray-400">为命令前缀配置询问和放行名单</div>
+                              <div className="text-xs text-gray-400">命中放行名单直接执行；命中询问名单时弹窗询问；都未命中按默认放行</div>
                             </div>
                           </div>
                           <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'cmd' ? 'rotate-90' : ''}`} />
@@ -753,13 +924,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                             <Wifi size={14} className="text-gray-500" />
                             <div className="text-left">
                               <div className="text-sm text-gray-700">网络安全</div>
-                              <div className="text-xs text-gray-400">控制 URL 访问与沙箱网络域名规则</div>
+                              <div className="text-xs text-gray-400">禁止域名直接拦截；配置允许域名后，其他域名先弹窗询问</div>
                             </div>
                           </div>
                           <ChevronRight size={14} className={`text-gray-400 transition-transform ${sandboxSection === 'net' ? 'rotate-90' : ''}`} />
                         </button>
                         {sandboxSection === 'net' && (
                           <div className="px-1 pb-3 space-y-2">
+                            <div className="text-[11px] text-gray-400 leading-relaxed">
+                              AI 的联网搜索（web_search）会依次尝试 cn.bing.com、html.duckduckgo.com、www.baidu.com；
+                              网页正文抓取（web_fetch）会访问搜到的具体网址，两者都受下面规则约束。
+                            </div>
                             <div>
                               <label className="text-xs text-gray-500">允许的域名（每行一个，如 api.example.com）</label>
                               <textarea
@@ -834,7 +1009,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                         <input
                           type="number"
                           value={(cfg as any).batchDeleteThreshold ?? 50}
-                          onChange={(e) => setConfig({ batchDeleteThreshold: parseInt(e.target.value) || 50 })}
+                          min={0}
+                          onChange={(e) => setConfig({ batchDeleteThreshold: Math.max(0, parseInt(e.target.value) || 0) })}
                           className="w-20 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 text-center"
                         />
                       </div>
@@ -848,27 +1024,28 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                     <div className="flex items-center gap-2">
                       <Database size={18} className="text-primary-500" />
                       <h3 className="text-sm font-medium text-gray-800">自动备份</h3>
-                      <HelpCircle size={14} className="text-gray-400" />
+                      <span title="AI 修改或删除文件前会自动备份到本地，可随时找回" className="inline-flex"><HelpCircle size={15} className="text-gray-500" /></span>
                     </div>
                     <Toggle
                       checked={(cfg as any).autoBackup ?? true}
                       onChange={(v) => setConfig({ autoBackup: v })}
                     />
                   </div>
-                  <p className="text-xs text-gray-500 mb-3">每轮对话修改文件之前自动备份</p>
+                  <p className="text-xs text-gray-500 mb-3">覆盖/编辑/删除文件前自动备份原文件，超出总上限时清理最旧的备份</p>
                   <div className="flex items-center gap-4 pt-2 border-t border-gray-100">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-500">备份总上限</span>
                       <input
                         type="number"
-                        value={(cfg as any).backupMaxSize ?? 3000}
-                        onChange={(e) => setConfig({ backupMaxSize: parseInt(e.target.value) || 3000 })}
+                          value={(cfg as any).backupMaxSize ?? 3000}
+                          min={1}
+                          onChange={(e) => setConfig({ backupMaxSize: Math.max(1, parseInt(e.target.value) || 3000) })}
                         className="w-24 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 text-center"
                       />
                       <span className="text-xs text-gray-500">MB</span>
                     </div>
                     <button
-                      onClick={() => window.electronAPI?.shell.openPath((useAppStore.getState().appInfo?.userDataPath || '') + '/conversations')}
+                      onClick={() => window.electronAPI?.app.openBackupDir()}
                       className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-800 transition-colors ml-auto"
                     >
                       <FolderOpen size={14} />
@@ -896,6 +1073,83 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                       <option value="enabled">启用</option>
                     </select>
                   </div>
+                </div>
+
+                {/* 对话页工具（ChatArea 的读写/执行能力） */}
+                <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare size={18} className="text-blue-500" />
+                      <div>
+                        <h3 className="text-sm font-medium text-gray-800">对话页工具</h3>
+                        <p className="text-xs text-gray-500">
+                          在「AI 助理」对话界面直接读写文件、执行命令（与任务视图同一套工具链）
+                        </p>
+                      </div>
+                    </div>
+                    <select
+                      value={cfg.chatToolsEnabled === false ? 'disabled' : 'enabled'}
+                      onChange={(e) => setConfig({ chatToolsEnabled: e.target.value === 'enabled' })}
+                      className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 bg-white"
+                    >
+                      <option value="enabled">启用</option>
+                      <option value="disabled">禁用（纯聊天）</option>
+                    </select>
+                  </div>
+
+                  {cfg.chatToolsEnabled !== false && (
+                    <>
+                      <div className="flex items-center justify-between gap-3 pt-3 border-t border-gray-100">
+                        <div className="min-w-0">
+                          <div className="text-sm text-gray-800">允许执行命令</div>
+                          <p className="text-xs text-gray-500">
+                            关闭时仍可读写文件，但不会运行任何命令（跟随安全中心策略）
+                          </p>
+                        </div>
+                        <select
+                          value={cfg.chatAllowExec === true ? 'enabled' : 'disabled'}
+                          onChange={(e) => setConfig({ chatAllowExec: e.target.value === 'enabled' })}
+                          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 bg-white flex-shrink-0"
+                        >
+                          <option value="disabled">禁止</option>
+                          <option value="enabled">允许</option>
+                        </select>
+                      </div>
+
+                      <div className="pt-3 border-t border-gray-100">
+                        <div className="text-sm text-gray-800 mb-1">工作目录</div>
+                        <p className="text-xs text-gray-500 mb-2">
+                          对话页创建的文件默认落在这个目录；留空则使用系统「文档」目录
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={cfg.chatWorkDir ?? ''}
+                            onChange={(e) => setConfig({ chatWorkDir: e.target.value })}
+                            placeholder="留空 = 系统「文档」目录"
+                            className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 bg-white"
+                          />
+                          <button
+                            onClick={async () => {
+                              const p = await window.electronAPI?.dialog.selectFolder()
+                              if (p) setConfig({ chatWorkDir: p })
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex-shrink-0"
+                          >
+                            <FolderOpen size={14} />
+                            选择
+                          </button>
+                          {cfg.chatWorkDir && (
+                            <button
+                              onClick={() => setConfig({ chatWorkDir: '' })}
+                              className="text-sm text-gray-500 hover:text-gray-700 transition-colors flex-shrink-0"
+                            >
+                              重置
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -1026,10 +1280,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 <div>
                   <SectionTitle>外观</SectionTitle>
                   <Card>
-                    <div className="py-3 flex gap-3">
-                      <button className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-white border-primary-300 text-primary-600">
-                        <Monitor size={16} /><span>浅色模式</span>
-                      </button>
+                    <ThemePicker value={cfg.theme ?? 'light'} onChange={(v) => setConfig({ theme: v })} />
+                    <div className="px-1 pb-1">
+                      <p className="text-xs text-gray-400">切换后立即生效，并持久化到配置文件。</p>
+                    </div>
+                  </Card>
+
+                  <SectionTitle>主题色</SectionTitle>
+                  <Card>
+                    <AccentPicker value={cfg.accent ?? 'sky'} onChange={(v) => setConfig({ accent: v })} />
+                    <div className="px-1 pb-3 -mt-1">
+                      <p className="text-xs text-gray-400">决定整个界面的色相：按钮、高亮、链接以及原本的白色底色都会被该色系晕染，只是深浅不同。与深浅色模式叠加生效。</p>
                     </div>
                   </Card>
                 </div>
@@ -1039,10 +1300,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             {/* About Tab */}
             {activeTab === 'about' && (
               <div className="text-center py-8">
-                <div className="w-16 h-16 bg-gradient-to-br from-primary-400 to-primary-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <span className="text-white text-2xl font-bold">M</span>
+                <div className="w-16 h-16 flex items-center justify-center mx-auto mb-4">
+                  <AppLogo size={64} />
                 </div>
-                <h2 className="text-xl font-bold text-gray-800 mb-1">Many AI</h2>
+                <h2 className="text-xl font-bold text-gray-800 mb-1">deepwork</h2>
                 <p className="text-sm text-gray-500 mb-1">版本 {appVersion}</p>
                 <p className="text-xs text-gray-400 mb-4">完成于 2026年08月27日</p>
                 <p className="text-sm text-gray-600 max-w-md mx-auto mb-4">
@@ -1050,13 +1311,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 </p>
                 <div className="text-xs text-gray-400 space-y-1">
                   <p>Electron + React + TypeScript + Tailwind CSS</p>
-                  <p>GitHub: yzw123456-666/many-agent</p>
+                  <p>GitHub: yzw123456-666/deepwork</p>
                 </div>
               </div>
             )}
 
             {/* Placeholder for other tabs */}
-            {!['models', 'system', 'about', 'agent', 'personalization', 'memory', 'shortcuts', 'security'].includes(activeTab) && (
+            {!['models', 'system', 'about', 'agent', 'personalization', 'memory', 'shortcuts', 'security', 'data'].includes(activeTab) && (
               <div className="text-center py-12">
                 <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
                   {React.createElement(menuItems.find((m) => m.id === activeTab)?.icon || Settings, {

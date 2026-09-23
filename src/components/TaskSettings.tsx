@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   X,
   Bot,
-  Zap,
   Check,
   Trash2,
   Save,
@@ -18,23 +17,12 @@ interface TaskSettingsProps {
 
 const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   const { t } = useTranslation()
-  const { models, updateTask, deleteTask, setCurrentTask, updateAICapability, aiCapabilities } = useAppStore()
+  const { models, updateTask, deleteTask, setCurrentTask, setActivePage } = useAppStore()
 
   const [taskName, setTaskName] = useState(task.name)
-  const [selectedModels, setSelectedModels] = useState<string[]>(task.mainModels)
-  const [capabilities, setCapabilities] = useState<Record<string, string>>({})
+  const [selectedModels, setSelectedModels] = useState<string[]>(task.mainModels || [])
 
   const enabledModels = models.filter(m => m.enabled)
-
-  useEffect(() => {
-    // Load existing capabilities
-    const caps: Record<string, string> = {}
-    models.forEach(m => {
-      const existing = aiCapabilities.find(c => c.modelId === m.id)
-      caps[m.id] = m.capability || existing?.strengths?.join(', ') || ''
-    })
-    setCapabilities(caps)
-  }, [])
 
   const toggleModel = (modelId: string) => {
     setSelectedModels(prev => {
@@ -44,18 +32,16 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   }
 
   const handleSave = async () => {
-    await updateTask(task.id, {
-      name: taskName,
-      mainModels: selectedModels,
-    })
-
-    // Save capabilities
-    Object.entries(capabilities).forEach(([modelId, cap]) => {
-      if (cap.trim()) {
-        updateAICapability(modelId, { strengths: cap.split(',').map(s => s.trim()) })
-      }
-    })
-
+    // 空名称会让标题栏与侧边栏显示空白；至少保留一个模型，否则执行时会随便抓一个（可能是已禁用的）
+    const name = taskName.trim() || task.name
+    const mainModels = selectedModels.length > 0 ? selectedModels : task.mainModels
+    try {
+      await updateTask(task.id, { name, mainModels })
+    } catch (e: any) {
+      // 早期版本失败也会关闭弹窗，用户以为保存成功、实际改动没落盘
+      window.alert(`保存任务设置失败：${e?.message || e}`)
+      return
+    }
     onClose()
   }
 
@@ -63,6 +49,8 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
     if (window.confirm('确定要删除这个任务吗？')) {
       await deleteTask(task.id)
       setCurrentTask(null)
+      // 删除任务后必须离开当前上下文：currentTask 为空会导致依赖它的界面渲染异常
+      setActivePage('projects')
       onClose()
     }
   }
@@ -141,64 +129,6 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
                     {selected && (
                       <Check size={16} className="text-primary-500" />
                     )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* AI Capabilities + 评估 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">AI 能力与评估</label>
-            <p className="text-xs text-gray-500 mb-3">描述每个AI的擅长领域（针对不会说话的模型如图像/视频生成必须手填），软件会自动评估并动态调整</p>
-            <div className="space-y-3">
-              {selectedModels.map((modelId) => {
-                const model = models.find(m => m.id === modelId)
-                if (!model) return null
-                const cap = aiCapabilities.find(c => c.modelId === modelId)
-                const unreliable = (cap?.failureCount || 0) >= 2
-                return (
-                  <div key={modelId} className={`border rounded-xl p-3 ${unreliable ? 'border-red-200 bg-red-50/50' : 'border-gray-200'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-gray-200 rounded-lg flex items-center justify-center text-sm font-bold text-gray-600 flex-shrink-0">
-                        {model.name.charAt(0)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-gray-700 flex items-center gap-2 flex-wrap">
-                          {model.name}
-                          {model.parameterSize && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded-full">{model.parameterSize}</span>
-                          )}
-                          {selectedModels.indexOf(modelId) === 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-primary-100 text-primary-600 rounded-full">主用</span>
-                          )}
-                          {cap?.autoAssessed && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">已自动评估</span>
-                          )}
-                          {unreliable && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full">反复失败×{cap?.failureCount}</span>
-                          )}
-                        </div>
-                        {/* 能力评估数据 */}
-                        {cap && cap.taskCount > 0 && (
-                          <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
-                            <span>任务 {cap.taskCount}</span>
-                            <span className={cap.successRate >= 70 ? 'text-green-600' : cap.successRate >= 40 ? 'text-yellow-600' : 'text-red-500'}>
-                              成功率 {cap.successRate}%
-                            </span>
-                            <span>综合 {cap.compositeScore}/10</span>
-                            <span>评分 {cap.rating}/10</span>
-                          </div>
-                        )}
-                        <input
-                          type="text"
-                          value={capabilities[modelId] || ''}
-                          onChange={(e) => setCapabilities({ ...capabilities, [modelId]: e.target.value })}
-                          placeholder="如：代码编写、数据分析、图像生成、文案创作..."
-                          className="w-full mt-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500"
-                        />
-                      </div>
-                    </div>
                   </div>
                 )
               })}
