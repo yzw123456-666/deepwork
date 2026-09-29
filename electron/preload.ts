@@ -13,6 +13,12 @@ const electronAPI = {
   config: {
     get: (key?: string) => ipcRenderer.invoke('config:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('config:set', key, value),
+    // 其他窗口的配置变更广播（设置独立窗口 ↔ 主窗口同步）；返回取消监听函数
+    onChange: (cb: (key: string, value: any) => void) => {
+      const listener = (_: unknown, key: string, value: any) => cb(key, value)
+      ipcRenderer.on('config:changed', listener)
+      return () => ipcRenderer.removeListener('config:changed', listener)
+    },
   },
 
   // Models operations
@@ -59,6 +65,14 @@ const electronAPI = {
     openDir: () => ipcRenderer.invoke('skills:openDir'),
   },
 
+  // Agents（Agent 包：人格 + 技能组合，在线市场双线路）
+  agents: {
+    list: () => ipcRenderer.invoke('agents:list'),
+    get: (id: string) => ipcRenderer.invoke('agents:get', id),
+    install: (id: string) => ipcRenderer.invoke('agents:install', id),
+    uninstall: (id: string) => ipcRenderer.invoke('agents:uninstall', id),
+  },
+
   // Tasks operations
   tasks: {
     getAll: () => ipcRenderer.invoke('tasks:getAll'),
@@ -83,11 +97,21 @@ const electronAPI = {
     // 内置浏览器：联网搜索与网页抓取（受安全中心网络策略约束）
     webSearch: (query: string, count?: number) => ipcRenderer.invoke('agent:webSearch', query, count),
     webFetch: (url: string, maxChars?: number) => ipcRenderer.invoke('agent:webFetch', url, maxChars),
+    // 任务清单（TodoWrite）：维护多步任务的可见进度
+    todo: (root: string, action: string, payload?: { content?: string; index?: number; status?: string }) =>
+      ipcRenderer.invoke('agent:todo', root, action, payload),
   },
 
   // File system operations
   fs: {
     readDirTree: (dirPath: string) => ipcRenderer.invoke('fs:readDirTree', dirPath),
+  },
+
+  // 应用壁纸（2026-09-25）：图片/视频/HTML 导入 userData/wallpapers/
+  wallpaper: {
+    chooseFile: (kind: 'image' | 'video' | 'html') => ipcRenderer.invoke('wallpaper:chooseFile', kind),
+    list: () => ipcRenderer.invoke('wallpaper:list'),
+    remove: (name: string) => ipcRenderer.invoke('wallpaper:remove', name),
   },
 
   // App info
@@ -99,6 +123,15 @@ const electronAPI = {
     setTheme: (mode: 'light' | 'dark' | 'system') => ipcRenderer.invoke('app:setTheme', mode),
     // 默认工作目录（对话页的工具链需要一个落盘位置，取不到时返回空串）
     getDefaultWorkDir: () => ipcRenderer.invoke('app:getDefaultWorkDir'),
+    // 打开设置独立窗口（2026-09-25：设置页从主窗口弹层改为独立窗口）
+    openSettings: () => ipcRenderer.invoke('app:openSettings'),
+    // 应用更新（免安装版补丁热替换）：检测版本 / 下载并应用补丁
+    checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
+    downloadUpdate: (patchUrl: string, sha256: string | null) =>
+      ipcRenderer.invoke('app:downloadUpdate', patchUrl, sha256),
+    // 启动独立更新器 / 卸载器（外部 exe 接管更新与卸载，主程序随后退出）
+    launchUpdater: () => ipcRenderer.invoke('app:launchUpdater'),
+    launchUninstaller: () => ipcRenderer.invoke('app:launchUninstaller'),
   },
 }
 

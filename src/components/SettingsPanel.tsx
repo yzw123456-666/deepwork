@@ -32,9 +32,17 @@ import {
   Brain,
   Sun,
   Moon,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  FileCode,
+  Link2,
+  Pencil,
+  User,
 } from 'lucide-react'
 import { useAppStore } from '../stores'
 import { Model, MemoryEntry } from '../types'
+import { BUILTIN_WALLPAPERS } from '../services/builtinWallpapers'
+import { REPLY_STYLES } from '../services/persona'
 import AppLogo from './AppLogo'
 import AddModelDialog from './AddModelDialog'
 import ModelManager from './ModelManager'
@@ -42,6 +50,8 @@ import { v4 as uuidv4 } from 'uuid'
 
 interface SettingsPanelProps {
   onClose: () => void
+  /** 独立窗口模式（2026-09-25）：铺满整个窗口、无黑遮罩圆角卡片，onClose = 关闭窗口 */
+  standalone?: boolean
 }
 
 /* ---------- 小组件 ---------- */
@@ -110,7 +120,7 @@ const ThemePicker: React.FC<{ value: string; onChange: (v: 'light' | 'dark' | 's
   )
 }
 
-/* ---------- 主题色选择（accent） ----------
+/* ---------- 主题色选择（accent，2026-09-25 晚恢复） ----------
    预览块同时展示「强调色」与「被染色的浅底」，让用户直观看到整个界面的色彩氛围 */
 const ACCENTS: Array<{ id: 'sky' | 'deepblue' | 'navy' | 'violet' | 'emerald' | 'teal' | 'lime' | 'rose' | 'amber'; label: string; hue: number }> = [
   { id: 'sky', label: '天蓝', hue: 199 },
@@ -136,8 +146,6 @@ const AccentPicker: React.FC<{ value: string; onChange: (v: typeof ACCENTS[numbe
             active ? 'border-gray-400 bg-gray-50' : 'border-gray-200 hover:bg-gray-50'
           }`}
         >
-          {/* 色块：上半强调色 + 下半染色浅底。下半用 45% 饱和 / 86% 亮度并加描边，
-              保证与卡片底色（99% 亮度）有足够对比，不会被"吞掉"显得残缺 */}
           <span
             className="w-7 h-7 rounded-lg flex-shrink-0 overflow-hidden"
             style={{
@@ -222,7 +230,320 @@ const TreeNode: React.FC<TreeNodeProps> = ({ item, level = 0, expandedDirs, togg
 
 /* ---------- 主面板 ---------- */
 
-const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
+/* 系统设置-显示：字体大小滑条的三档（小/默认/大） */
+const FONT_SIZES = ['small', 'medium', 'large'] as const
+
+/* ---------- 人格设置（2026-09-25，参考 WorkBuddy） ----------
+   回复风格 / 自定义指令 / 称呼与身份 / 人设描述，注入所有对话 */
+const PersonaCard: React.FC = () => {
+  const { config, setConfig } = useAppStore()
+  const cfg = config as any
+  const [styleOpen, setStyleOpen] = useState(false)
+  const [editingPersona, setEditingPersona] = useState(false)
+  const [personaDraft, setPersonaDraft] = useState('')
+  const style = REPLY_STYLES.find(s => s.id === (cfg.replyStyle ?? 'default')) ?? REPLY_STYLES[0]
+  const instructions = String(cfg.customInstructions ?? '')
+
+  return (
+    <Card>
+      {/* 回复风格 */}
+      <div className="py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-gray-800">回复风格</div>
+          <p className="text-xs text-gray-500 mt-0.5">选择 AI 回复的默认语气</p>
+        </div>
+        <div className="relative flex-shrink-0">
+          <button
+            onClick={() => setStyleOpen(o => !o)}
+            className="flex items-center justify-between gap-2 w-36 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-700 hover:border-gray-300 transition-colors"
+          >
+            <span className="truncate">{style.label}</span>
+            <ChevronRight size={14} className={`text-gray-400 transition-transform ${styleOpen ? 'rotate-90' : ''}`} />
+          </button>
+          {styleOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setStyleOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 w-60 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 max-h-72 overflow-y-auto">
+                {REPLY_STYLES.map(s => {
+                  const active = s.id === (cfg.replyStyle ?? 'default')
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => { setConfig({ replyStyle: s.id }); setStyleOpen(false) }}
+                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 transition-colors ${active ? 'bg-primary-50' : ''}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-sm ${active ? 'text-primary-600 font-medium' : 'text-gray-700'}`}>{s.label}</span>
+                        {active && <CheckCircle size={14} className="text-primary-500 flex-shrink-0" />}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-0.5">{s.desc}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 自定义指令 */}
+      <div className="py-3 border-b border-gray-100">
+        <div className="text-sm font-medium text-gray-800">自定义指令</div>
+        <p className="text-xs text-gray-500 mt-0.5 mb-2">给 AI 定几条规则，后续所有对话都生效</p>
+        <textarea
+          value={instructions}
+          maxLength={1500}
+          rows={4}
+          onChange={(e) => setConfig({ customInstructions: e.target.value })}
+          placeholder="例如：回答先给结论再展开..."
+          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 resize-y"
+        />
+        <div className="text-right text-xs text-gray-400 mt-1">{instructions.length} / 1500</div>
+      </div>
+
+      {/* 称呼与身份 */}
+      <div className="py-3 border-b border-gray-100">
+        <div className="text-sm font-medium text-gray-800 mb-2">称呼与身份</div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-gray-700 min-w-0">AI 的名字</span>
+            <input
+              value={String(cfg.aiName ?? '')}
+              maxLength={30}
+              onChange={(e) => setConfig({ aiName: e.target.value })}
+              placeholder="（待补充）"
+              className="w-44 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-primary-400"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-gray-700 min-w-0">对你的称呼</span>
+            <input
+              value={String(cfg.userNickname ?? '')}
+              maxLength={30}
+              onChange={(e) => setConfig({ userNickname: e.target.value })}
+              placeholder="（待补充）"
+              className="w-44 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-primary-400"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 人设 / 人格描述 */}
+      <div className="py-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm text-gray-500">人设 / 人格描述</span>
+          {editingPersona ? (
+            <button
+              onClick={() => { setConfig({ personaPrompt: personaDraft }); setEditingPersona(false) }}
+              className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-primary-500 text-white hover:bg-primary-600 transition-colors"
+            >
+              <CheckCircle size={12} />完成
+            </button>
+          ) : (
+            <button
+              onClick={() => { setPersonaDraft(String(cfg.personaPrompt ?? '')); setEditingPersona(true) }}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 transition-colors"
+            >
+              <Pencil size={12} />编辑
+            </button>
+          )}
+        </div>
+        {editingPersona ? (
+          <textarea
+            value={personaDraft}
+            maxLength={2000}
+            rows={6}
+            autoFocus
+            onChange={(e) => setPersonaDraft(e.target.value)}
+            placeholder="描述 AI 的人格：说话方式、价值观、口头禅..."
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 resize-y"
+          />
+        ) : (
+          <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-600 whitespace-pre-wrap break-words min-h-[64px] max-h-56 overflow-y-auto">
+            {String(cfg.personaPrompt ?? '').trim() || '（未设置——AI 使用默认人格）'}
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/* ---------- 壁纸设置（2026-09-25，参考 Wallpaper Engine） ----------
+   内置动态壁纸 + 本地图片/视频/HTML + 网址；暗化遮罩与侧栏毛玻璃可调 */
+const wpTypeFromName = (name: string): 'image' | 'video' | 'html' => {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  if (['mp4', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video'
+  if (['html', 'htm'].includes(ext)) return 'html'
+  return 'image'
+}
+const wpFmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`)
+
+const WallpaperCard: React.FC = () => {
+  const { config, setConfig } = useAppStore()
+  const wp: any = (config as any).wallpaper ?? { type: 'none', value: '', dim: 0.35, blur: 18 }
+  const [urlInput, setUrlInput] = useState('')
+  const [imported, setImported] = useState<Array<{ name: string; path: string; size: number }>>([])
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const setWp = (patch: any) => setConfig({ wallpaper: { type: 'none', value: '', dim: 0.35, blur: 18, ...wp, ...patch } })
+  const loadImported = () => {
+    window.electronAPI?.wallpaper.list?.().then(r => { if (r?.ok && r.items) setImported(r.items) }).catch(() => {})
+  }
+  useEffect(() => { loadImported() }, [])
+
+  const choose = async (kind: 'image' | 'video' | 'html') => {
+    setBusy(kind)
+    try {
+      const r = await window.electronAPI?.wallpaper.chooseFile?.(kind)
+      if (r?.ok && r.path) setWp({ type: kind, value: r.path })
+      loadImported()
+    } finally { setBusy(null) }
+  }
+
+  const wpOn = wp.type && wp.type !== 'none'
+  const btnCls = `flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors ${
+    busy ? 'opacity-60 cursor-wait' : 'hover:bg-gray-50'
+  } border-gray-200 text-gray-600`
+
+  return (
+    <Card>
+      {/* 内置动态壁纸 */}
+      <div className="py-3 border-b border-gray-100">
+        <h4 className="text-sm font-medium text-gray-800 mb-3">内置动态壁纸</h4>
+        <div className="grid grid-cols-4 gap-2.5">
+          <button
+            onClick={() => setWp({ type: 'none', value: '' })}
+            className={`h-[68px] rounded-lg border-2 flex items-center justify-center text-xs transition-colors ${
+              !wpOn ? 'border-primary-400 text-primary-600 bg-primary-50' : 'border-gray-200 text-gray-400 hover:bg-gray-50'
+            }`}
+          >
+            关闭壁纸
+          </button>
+          {BUILTIN_WALLPAPERS.map(b => {
+            const active = wp.type === 'builtin' && wp.value === b.id
+            return (
+              <button
+                key={b.id}
+                onClick={() => setWp({ type: 'builtin', value: b.id })}
+                className={`h-[68px] rounded-lg border-2 relative overflow-hidden transition-all ${
+                  active ? 'border-primary-500' : 'border-transparent hover:border-gray-300'
+                }`}
+                style={{ background: b.css }}
+                title={b.name}
+              >
+                <span className="absolute inset-x-0 bottom-0 py-0.5 text-[11px] text-white bg-black/40">{b.name}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* 上传 / 网址 */}
+      <div className="py-3 border-b border-gray-100">
+        <h4 className="text-sm font-medium text-gray-800 mb-3">自定义壁纸</h4>
+        <div className="flex gap-2 flex-wrap mb-3">
+          <button className={btnCls} onClick={() => choose('image')} disabled={!!busy}>
+            <ImageIcon size={15} />图片
+          </button>
+          <button className={btnCls} onClick={() => choose('video')} disabled={!!busy}>
+            <VideoIcon size={15} />视频
+          </button>
+          <button className={btnCls} onClick={() => choose('html')} disabled={!!busy}>
+            <FileCode size={15} />HTML 文件
+          </button>
+        </div>
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Link2 size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && urlInput.trim()) setWp({ type: 'url', value: urlInput.trim() }) }}
+              placeholder="粘贴网页地址作为壁纸（如动态页面 / 在线视频页）"
+              className="w-full pl-8 pr-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 focus:outline-none focus:border-primary-400"
+            />
+          </div>
+          <button
+            className={btnCls}
+            disabled={!urlInput.trim()}
+            onClick={() => { if (urlInput.trim()) { setWp({ type: 'url', value: urlInput.trim() }); setUrlInput('') } }}
+          >
+            应用
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 mt-2">导入的文件会复制到应用数据目录管理，不影响原文件。部分网站禁止被嵌入，网址壁纸可能显示空白。</p>
+      </div>
+
+      {/* 已导入壁纸 */}
+      {imported.length > 0 && (
+        <div className="py-3 border-b border-gray-100">
+          <h4 className="text-sm font-medium text-gray-800 mb-2">已导入（{imported.length}）</h4>
+          <div className="space-y-1.5 max-h-44 overflow-y-auto">
+            {imported.map(it => {
+              const active = wp.value === it.path
+              return (
+                <div key={it.path} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-sm ${active ? 'border-primary-300 bg-primary-50' : 'border-gray-100'}`}>
+                  <span className="flex-1 truncate text-gray-700" title={it.name}>{it.name}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0">{wpFmtSize(it.size)}</span>
+                  <button
+                    className="text-xs px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 flex-shrink-0"
+                    onClick={() => setWp({ type: wpTypeFromName(it.name), value: it.path })}
+                  >
+                    使用
+                  </button>
+                  <button
+                    className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 flex-shrink-0"
+                    title="删除该导入副本"
+                    onClick={() => {
+                      window.electronAPI?.wallpaper.remove?.(it.name).then(() => {
+                        loadImported()
+                        if (active) setWp({ type: 'none', value: '' })
+                      }).catch(() => {})
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 显示调节（壁纸激活时） */}
+      {wpOn && (
+        <div className="py-3">
+          <h4 className="text-sm font-medium text-gray-800 mb-3">显示调节</h4>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3 text-sm text-gray-600">
+              <span className="w-20 flex-shrink-0">暗化遮罩</span>
+              <input
+                type="range" min={0} max={70} step={5}
+                value={Math.round((typeof wp.dim === 'number' ? wp.dim : 0.35) * 100)}
+                onChange={e => setWp({ dim: Number(e.target.value) / 100 })}
+                className="flex-1 accent-primary-500"
+              />
+              <span className="w-10 text-right text-xs text-gray-400">{Math.round((typeof wp.dim === 'number' ? wp.dim : 0.35) * 100)}%</span>
+            </label>
+            <label className="flex items-center gap-3 text-sm text-gray-600">
+              <span className="w-20 flex-shrink-0">玻璃模糊</span>
+              <input
+                type="range" min={0} max={30} step={2}
+                value={typeof wp.blur === 'number' ? wp.blur : 18}
+                onChange={e => setWp({ blur: Number(e.target.value) })}
+                className="flex-1 accent-primary-500"
+              />
+              <span className="w-10 text-right text-xs text-gray-400">{typeof wp.blur === 'number' ? wp.blur : 18}px</span>
+            </label>
+            <p className="text-xs text-gray-400">模糊作用于整个界面（标题栏、侧栏、内容区一起毛玻璃化），0 = 关闭玻璃直接透出壁纸；弹窗不受影响。暗化让壁纸上方的文字更清楚。</p>
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, standalone }) => {
   const { t, i18n } = useTranslation()
   const { models, addModel, updateModel, deleteModel, setConfig, config } = useAppStore()
   const { globalMemory, addMemory, deleteMemory, clearMemory, searchMemory } = useAppStore()
@@ -233,6 +554,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [dirTree, setDirTree] = useState<any[]>([])
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [appVersion, setAppVersion] = useState('')
+  // 更新检测状态
+  const [checking, setChecking] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<any>(null)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState<{ received: number; total: number } | null>(null)
+  const [applyMsg, setApplyMsg] = useState<string>('')
   const [sandboxSection, setSandboxSection] = useState<string | null>(null)
   // 记忆页
   const [memoryQuery, setMemoryQuery] = useState('')
@@ -244,6 +571,41 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
       if (info?.version) setAppVersion(info.version)
     }).catch(() => {})
   }, [])
+
+  // 检测更新
+  const handleCheckUpdate = async () => {
+    setChecking(true)
+    setUpdateInfo(null)
+    setApplyMsg('')
+    try {
+      const r = await window.electronAPI?.app.checkUpdate()
+      setUpdateInfo(r || { ok: false, error: '无返回' })
+    } catch (e: any) {
+      setUpdateInfo({ ok: false, error: String(e?.message || e) })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  // 启动独立更新器（关闭主程序，由 update.exe 完成下载与整文件夹替换）
+  const handleUpdate = async () => {
+    if (!updateInfo?.hasUpdate) return
+    setDownloading(true)
+    setApplyMsg('正在启动更新器…')
+    try {
+      const r = await window.electronAPI?.app.launchUpdater()
+      if (r?.ok) {
+        // 主程序即将退出，更新器接管后续下载/替换
+        setApplyMsg('更新器已启动，软件即将重启以完成更新…')
+      } else {
+        setApplyMsg('启动更新器失败：' + (r?.error || '未知错误'))
+        setDownloading(false)
+      }
+    } catch (e: any) {
+      setApplyMsg('启动更新器失败：' + String(e?.message || e))
+      setDownloading(false)
+    }
+  }
 
   // 加载目录树
   const loadDirTree = async () => {
@@ -286,6 +648,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const menuItems = [
     { id: 'system', icon: Settings, label: t('settings.title') },
     { id: 'agent', icon: Bot, label: t('settings.agent') },
+    { id: 'persona', icon: User, label: '人格设置' },
     { id: 'personalization', icon: Palette, label: t('settings.personalization') },
     { id: 'models', icon: Database, label: t('settings.models') },
     { id: 'memory', icon: Brain, label: '长期记忆' },
@@ -409,8 +772,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl w-[950px] h-[650px] flex overflow-hidden">
+    <div className={standalone
+      ? 'h-screen bg-gray-50 flex justify-center overflow-hidden'
+      : 'fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-pop-in'}>
+      <div className={standalone
+        ? 'bg-white w-[950px] h-full flex overflow-hidden'
+        : 'bg-white rounded-2xl shadow-2xl w-[950px] h-[650px] flex overflow-hidden'}>
         {/* Left Menu */}
         <div className="w-56 bg-gray-50 border-r border-gray-200 p-3">
           <div className="mb-4 px-3 py-2">
@@ -663,37 +1030,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
               </div>
             )}
 
+            {/* Persona Tab（独立于「个性化」，v26.9.62 起单独成项） */}
+            {activeTab === 'persona' && (
+              <div className="max-w-2xl">
+                <PersonaCard />
+              </div>
+            )}
+
             {/* Personalization Tab */}
             {activeTab === 'personalization' && (
               <div className="max-w-2xl">
-                <SectionTitle>显示</SectionTitle>
-                <Card>
-                  <div className="py-3 border-b border-gray-100">
-                    <h4 className="text-sm font-medium text-gray-800 mb-3">{t('settings.fontSize')}</h4>
-                    <div className="flex gap-2">
-                      {(['small', 'medium', 'large'] as const).map((size) => (
-                        <button
-                          key={size}
-                          onClick={() => setConfig({ fontSize: size })}
-                          className={`px-4 py-1.5 rounded-lg border text-sm transition-colors ${
-                            (cfg.fontSize ?? 'medium') === size
-                              ? 'bg-primary-50 border-primary-300 text-primary-600'
-                              : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                          }`}
-                        >
-                          {t(`settings.fontSize${size.charAt(0).toUpperCase()}${size.slice(1)}`)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <SettingRow title={t('settings.showTimestamp')}>
-                    <Toggle
-                      checked={cfg.showTimestamp ?? false}
-                      onChange={(v) => setConfig({ showTimestamp: v })}
-                    />
-                  </SettingRow>
-                </Card>
-
                 <SectionTitle>输入</SectionTitle>
                 <Card>
                   <div className="py-3">
@@ -760,9 +1106,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 <Card>
                   <AccentPicker value={cfg.accent ?? 'sky'} onChange={(v) => setConfig({ accent: v })} />
                   <div className="px-1 pb-3 -mt-1">
-                    <p className="text-xs text-gray-400">决定整个界面的色相：按钮、高亮、链接以及原本的白色底色都会被该色系晕染，只是深浅不同。与深浅色模式叠加生效。</p>
+                    <p className="text-xs text-gray-400">决定整个界面的色相：按钮、高亮、链接以及底色都会被该色系晕染，与壁纸、深浅色模式叠加生效。</p>
                   </div>
                 </Card>
+
+                <SectionTitle>壁纸</SectionTitle>
+                <WallpaperCard />
               </div>
             )}
 
@@ -1251,6 +1600,37 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             {activeTab === 'system' && (
               <div className="space-y-6 max-w-2xl">
                 <div>
+                  <SectionTitle>显示</SectionTitle>
+                  <Card>
+                    <div className="py-3 border-b border-gray-100">
+                      <div className="flex items-center gap-5">
+                        <span className="text-sm font-medium text-gray-800 flex-shrink-0">字体大小</span>
+                        <div className="flex-1 min-w-0 pt-1">
+                          <input
+                            type="range" min={0} max={2} step={1}
+                            value={FONT_SIZES.indexOf((cfg.fontSize ?? 'medium') as any)}
+                            onChange={(e) => setConfig({ fontSize: FONT_SIZES[Number(e.target.value)] })}
+                            className="w-full accent-primary-500 cursor-pointer"
+                          />
+                          <div className="flex justify-between text-xs mt-0.5">
+                            {(['小', '默认', '大'] as const).map((label, i) => (
+                              <span key={label} className={FONT_SIZES.indexOf((cfg.fontSize ?? 'medium') as any) === i ? 'text-gray-700 font-medium' : 'text-gray-400'}>
+                                {label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <SettingRow title={t('settings.showTimestamp')}>
+                      <Toggle
+                        checked={cfg.showTimestamp ?? false}
+                        onChange={(v) => setConfig({ showTimestamp: v })}
+                      />
+                    </SettingRow>
+                  </Card>
+                </div>
+                <div>
                   <SectionTitle>语言设置</SectionTitle>
                   <Card>
                     <div className="py-3 flex gap-3">
@@ -1278,21 +1658,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                   </Card>
                 </div>
                 <div>
-                  <SectionTitle>外观</SectionTitle>
-                  <Card>
-                    <ThemePicker value={cfg.theme ?? 'light'} onChange={(v) => setConfig({ theme: v })} />
-                    <div className="px-1 pb-1">
-                      <p className="text-xs text-gray-400">切换后立即生效，并持久化到配置文件。</p>
-                    </div>
-                  </Card>
-
-                  <SectionTitle>主题色</SectionTitle>
-                  <Card>
-                    <AccentPicker value={cfg.accent ?? 'sky'} onChange={(v) => setConfig({ accent: v })} />
-                    <div className="px-1 pb-3 -mt-1">
-                      <p className="text-xs text-gray-400">决定整个界面的色相：按钮、高亮、链接以及原本的白色底色都会被该色系晕染，只是深浅不同。与深浅色模式叠加生效。</p>
-                    </div>
-                  </Card>
+                  {/* 外观（深浅模式）已于 2026-09-25 移至「个性化」tab */}
                 </div>
               </div>
             )}
@@ -1312,12 +1678,79 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 <div className="text-xs text-gray-400 space-y-1">
                   <p>Electron + React + TypeScript + Tailwind CSS</p>
                   <p>GitHub: yzw123456-666/deepwork</p>
+                  <p>
+                    反馈邮箱:{' '}
+                    <a
+                      href="mailto:yzwkf@hotmail.com"
+                      className="text-primary-500 hover:text-primary-600 hover:underline"
+                    >
+                      yzwkf@hotmail.com
+                    </a>
+                  </p>
+                </div>
+
+                {/* 更新检测 */}
+                <div className="mt-6 max-w-md mx-auto">
+                  <button
+                    onClick={handleCheckUpdate}
+                    disabled={checking || downloading}
+                    className="px-4 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium hover:bg-primary-600 disabled:opacity-60 transition-colors"
+                  >
+                    {checking ? '正在检查…' : downloading ? '更新中…' : '检查更新'}
+                  </button>
+
+                  <div className="mt-3 text-sm">
+                    {updateInfo?.ok === false && (
+                      <p className="text-red-500">检查失败：{updateInfo.error}</p>
+                    )}
+                    {updateInfo?.ok && updateInfo.hasUpdate && (
+                      <div className="text-left bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <p className="text-gray-800 font-medium mb-1">
+                          发现新版本 v{updateInfo.latest}（当前 v{updateInfo.current}）
+                        </p>
+                        {updateInfo.pubDate && (
+                          <p className="text-xs text-gray-400 mb-1">发布于 {updateInfo.pubDate}</p>
+                        )}
+                        {updateInfo.notes && (
+                          <p className="text-xs text-gray-600 whitespace-pre-wrap mb-2">{updateInfo.notes}</p>
+                        )}
+                        {!downloading ? (
+                          <button
+                            onClick={handleUpdate}
+                            className="px-3 py-1.5 rounded-lg bg-primary-500 text-white text-sm font-medium hover:bg-primary-600 transition-colors"
+                          >
+                            立即更新
+                          </button>
+                        ) : (
+                          <p className="text-primary-500 text-sm">{applyMsg || '正在下载并应用…'}</p>
+                        )}
+                      </div>
+                    )}
+                    {updateInfo?.ok && !updateInfo.hasUpdate && !checking && (
+                      <p className="text-green-600">已是最新版本（v{updateInfo.current}）</p>
+                    )}
+                    {!updateInfo && !checking && !downloading && (
+                      <p className="text-gray-400">点击「检查更新」获取最新版本</p>
+                    )}
+                  </div>
+
+                  {/* 卸载 */}
+                  <button
+                    onClick={async () => {
+                      if (!window.confirm('确定要卸载 deepwork 吗？此操作不可恢复。')) return
+                      const r = await window.electronAPI?.app.launchUninstaller()
+                      if (!r?.ok) window.alert('启动卸载器失败：' + (r?.error || '请手动删除程序文件夹'))
+                    }}
+                    className="mt-6 px-4 py-2 rounded-lg border border-red-200 text-red-500 text-sm font-medium hover:bg-red-50 transition-colors"
+                  >
+                    卸载 deepwork
+                  </button>
                 </div>
               </div>
             )}
 
             {/* Placeholder for other tabs */}
-            {!['models', 'system', 'about', 'agent', 'personalization', 'memory', 'shortcuts', 'security', 'data'].includes(activeTab) && (
+            {!['models', 'system', 'about', 'agent', 'persona', 'personalization', 'memory', 'shortcuts', 'security', 'data'].includes(activeTab) && (
               <div className="text-center py-12">
                 <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
                   {React.createElement(menuItems.find((m) => m.id === activeTab)?.icon || Settings, {

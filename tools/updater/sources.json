@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "name": "GitHub",
+      "versionUrl": "https://github.com/yzw123456-666/deepwork/releases/latest/download/version.json"
+    },
+    {
+      "name": "文汇百川",
+      "versionUrl": "https://s100636-weba.publicos.cn/deepwork-update/version.json"
+    },
+    {
+      "name": "Gitee",
+      "versionUrl": "https://gitee.com/yzw123456-666/deepwork/releases/download/latest/version.json"
+    },
+    {
+      "name": "GitCode",
+      "versionUrl": "https://gitcode.com/yzw123456-666/deepwork/releases/download/latest/version.json"
+    },
+    {
+      "name": "我的服务器",
+      "versionUrl": "https://yzw.silksky.com/deepwork/version.json"
+    }
+  ]
+}

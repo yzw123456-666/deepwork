@@ -140,20 +140,35 @@ ok('命令面板含 bash 标签与命令本体', /bash/.test(chat) && /detail\.t
   // 引擎「未保存代码」判定：思考区草稿不算违规、正文代码才算（2026-09-23 修复静默终止 bug）
   ;(function thinkExemptCheck() {
     const eng = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agentEngine.ts'), 'utf8')
+    // 括号感知提取：hasUnsavedCodeBlock 含嵌套 {}，旧的「找到第一个 \n}」会截断函数
     function grabEng(name) {
       const i = eng.indexOf('function ' + name + '(')
       if (i === -1) return ''
-      const e = eng.indexOf('\n}', i)
-      return eng.slice(i, e + 2)
+      let depth = 0, started = false
+      for (let j = i; j < eng.length; j++) {
+        const c = eng[j]
+        if (c === '{') { depth++; started = true }
+        else if (c === '}') {
+          depth--
+          if (started && depth === 0) return eng.slice(i, j + 1)
+        }
+      }
+      return ''
     }
-    const raw2 = [grabEng('stripThinkForCheck'), grabEng('hasUnsavedCodeBlock'), grabEng('isWriteIntentTask')].join('\n')
+    const raw2 = [grabEng('hasUnsavedCodeBlock'), grabEng('isWriteIntentTask')].join('\n')
     try {
       const js2 = ts.transpileModule(raw2, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
-      const f2 = new Function(js2 + '\nreturn { hasUnsavedCodeBlock, isWriteIntentTask, stripThinkForCheck }')()
+      const f2 = new Function(js2 + '\nreturn { hasUnsavedCodeBlock, isWriteIntentTask }')()
       const big = '```html\n' + 'x'.repeat(200) + '\n```'
       ok('思考区里的代码草稿不算「未保存代码」违规', f2.hasUnsavedCodeBlock('<think>让我写代码\n' + big + '\n</think>\n好了') === false)
       ok('正文里的代码块仍算违规', f2.hasUnsavedCodeBlock('这是代码：\n' + big) === true)
       ok('未闭合思考区（流式中）同样豁免', f2.hasUnsavedCodeBlock('<think>写草稿\n' + big) === false)
+      // v26.9.48：完整文件藏在 <think> 必须判定违规（防逃避落盘）
+      const fileCode = '```python\n' + Array.from({ length: 60 }, (_, i) => `def func_${i}():\n    return ${i}`).join('\n') + '\n```'
+      ok('完整文件藏在 <think> 必须判定违规', f2.hasUnsavedCodeBlock('<think>先写个备忘录程序\n' + fileCode + '\n</think>') === true)
+      // v26.9.48：思考区内裸代码（无围栏、可见正文极短）也必须判定违规
+      const rawThink = '<think>\n' + Array.from({ length: 15 }, (_, i) => `def helper_${i}():\n    pass`).join('\n') + '\n</think>'
+      ok('思考区内成片裸代码（无围栏）也必须判定违规', f2.hasUnsavedCodeBlock(rawThink) === true)
       ok('写入意图识别（写网页/改文件 → true）', f2.isWriteIntentTask('写一个围棋网页') === true && f2.isWriteIntentTask('帮我改下这个 html 文件') === true)
       ok('纯咨询任务不误伤（不会要求写文件）', f2.isWriteIntentTask('什么是闭包') === false)
     } catch (e) {

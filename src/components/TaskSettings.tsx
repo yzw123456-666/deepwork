@@ -56,7 +56,7 @@ const TaskSettings: React.FC<TaskSettingsProps> = ({ task, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] animate-fade-in">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] animate-pop-in">
       <div className="bg-white rounded-2xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">

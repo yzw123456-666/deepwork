@@ -1,6 +1,7 @@
 ﻿import { app, BrowserWindow, ipcMain, Tray, Menu, shell, dialog, Notification, nativeTheme, screen } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import { spawn } from 'child_process'
 import {
   SecurityConfig,
   assertInsideRoot,
@@ -15,6 +16,7 @@ import {
   setPolicyBypass,
 } from './security'
 import { webSearch, webFetch, summarizePage } from './websearch'
+import { copyRecursive, appendWithNewline } from './fileOps'
 import {
   skillsDir,
   listSkills,
@@ -25,12 +27,16 @@ import {
   isSafeSlug,
   type SkillMeta,
 } from './skills'
+import { checkUpdate, downloadAndApply, getAppDir, currentVersion, UPDATE_BASE_URL } from './updater'
+import { listAgents, getAgent, installAgent, uninstallAgent } from './agents'
 
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
   let mainWindow: BrowserWindow | null = null
+  // 设置独立窗口（2026-09-25）：单例，存在则 focus
+  let settingsWindow: BrowserWindow | null = null
 
   const userDataPath = app.getPath('userData')
   const MODELS_FILE = path.join(userDataPath, 'models.json')
@@ -243,10 +249,55 @@ if (!gotTheLock) {
       const cfg = readJSON(CONFIG_FILE, {})
       return key ? cfg[key] : cfg
     })
-    ipcMain.handle('config:set', (_, key, value) => {
+    ipcMain.handle('config:set', (event, key, value) => {
       const cfg = readJSON(CONFIG_FILE, {})
       cfg[key] = value
-      return writeJSON(CONFIG_FILE, cfg)
+      const ok = writeJSON(CONFIG_FILE, cfg)
+      // 配置变更广播到其他窗口（设置独立窗口 ↔ 主窗口实时同步；跳过发送者自身防回环）
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && w.webContents !== event.sender) {
+          w.webContents.send('config:changed', key, value)
+        }
+      }
+      return ok
+    })
+
+    // 设置独立窗口（2026-09-25）：从主窗口弹层改为独立 BrowserWindow
+    ipcMain.handle('app:openSettings', () => {
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        if (settingsWindow.isMinimized()) settingsWindow.restore()
+        settingsWindow.focus()
+        return
+      }
+      settingsWindow = new BrowserWindow({
+        width: 980,
+        height: 700,
+        minWidth: 760,
+        minHeight: 520,
+        title: 'deepwork 设置',
+        icon: (() => {
+          const candidates = [
+            path.join(process.resourcesPath, 'icon.png'),
+            path.join(__dirname, '..', '..', 'resources', 'icon.png'),
+          ]
+          for (const p of candidates) {
+            try { if (fs.existsSync(p)) return p } catch { /* 忽略 */ }
+          }
+          return undefined
+        })(),
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: false,
+        },
+        backgroundColor: '#ffffff',
+        show: false,
+      })
+      settingsWindow.setMenuBarVisibility(false)
+      settingsWindow.loadFile(path.join(__dirname, '../dist/settings.html'))
+      settingsWindow.once('ready-to-show', () => settingsWindow?.show())
+      settingsWindow.on('closed', () => { settingsWindow = null })
     })
 
     ipcMain.handle('conversations:getAll', () => {
@@ -393,6 +444,74 @@ if (!gotTheLock) {
       })
       if (result.canceled || result.filePaths.length === 0) return []
       return result.filePaths
+    })
+
+    // ---------- 应用壁纸（2026-09-25）：导入文件到 userData/wallpapers/ ----------
+    // 壁纸文件是用户主动选择的素材副本，集中管理便于换壁纸/清理；源文件不动。
+    const WALLPAPER_DIR = path.join(app.getPath('userData'), 'wallpapers')
+    const ensureWallpaperDir = () => {
+      if (!fs.existsSync(WALLPAPER_DIR)) fs.mkdirSync(WALLPAPER_DIR, { recursive: true })
+      return WALLPAPER_DIR
+    }
+    ipcMain.handle('wallpaper:chooseFile', async (_, kind: string) => {
+      if (!mainWindow) return { ok: false, error: '窗口未就绪' }
+      const filters: Electron.FileFilter[] =
+        kind === 'video'
+          ? [{ name: '视频壁纸', extensions: ['mp4', 'webm', 'mov', 'm4v', 'ogv'] }]
+          : kind === 'html'
+            ? [{ name: 'HTML 壁纸', extensions: ['html', 'htm'] }]
+            : [{ name: '图片壁纸', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif'] }]
+      const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openFile'],
+        title: kind === 'video' ? '选择视频壁纸' : kind === 'html' ? '选择 HTML 壁纸' : '选择图片壁纸',
+        filters,
+      })
+      if (result.canceled || result.filePaths.length === 0) return { ok: false, error: 'canceled' }
+      const src = result.filePaths[0]
+      try {
+        ensureWallpaperDir()
+        const base = path.basename(src)
+        const ext = path.extname(base)
+        const stem = path.basename(base, ext)
+        // 名字带时间戳防冲突：stem.HHmmss.ext
+        const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '')
+        let name = `${stem}.${stamp}${ext}`
+        let dest = path.join(WALLPAPER_DIR, name)
+        let n = 1
+        while (fs.existsSync(dest)) { name = `${stem}.${stamp}.${n++}${ext}`; dest = path.join(WALLPAPER_DIR, name) }
+        fs.copyFileSync(src, dest)
+        return { ok: true, path: dest, name }
+      } catch (e: any) {
+        return { ok: false, error: e?.message || '导入失败' }
+      }
+    })
+    ipcMain.handle('wallpaper:list', async () => {
+      try {
+        ensureWallpaperDir()
+        const items = fs.readdirSync(WALLPAPER_DIR)
+          .map(name => {
+            const p = path.join(WALLPAPER_DIR, name)
+            try {
+              const st = fs.statSync(p)
+              return st.isFile() ? { name, path: p, size: st.size } : null
+            } catch { return null }
+          })
+          .filter(Boolean)
+        return { ok: true, items }
+      } catch (e: any) {
+        return { ok: false, error: e?.message || '读取失败', items: [] }
+      }
+    })
+    ipcMain.handle('wallpaper:remove', async (_, name: string) => {
+      try {
+        // 只允许删 wallpapers/ 顶层文件（basename 防目录穿越）
+        const safe = path.basename(String(name || ''))
+        const p = path.join(WALLPAPER_DIR, safe)
+        if (fs.existsSync(p) && fs.statSync(p).isFile()) fs.unlinkSync(p)
+        return { ok: true }
+      } catch (e: any) {
+        return { ok: false, error: e?.message || '删除失败' }
+      }
     })
 
     ipcMain.handle('dialog:readFileContent', (_, filePath: string) => {
@@ -712,15 +831,14 @@ if (!gotTheLock) {
       }
     })
 
-    // 追加内容到文件末尾
+    // 追加内容到文件末尾（自动补换行，避免与上一行拼接）
     ipcMain.handle('agent:appendFile', (_, root: string, relPath: string, content: string) => {
       try {
         const fp = assertInsideRoot(root, resolveInsideRoot(root, relPath))
         const blocked = guardFile(fp)
         if (blocked) return { ok: false, error: blocked }
         const backup = backupBeforeChange(fp)
-        ensureDir(path.dirname(fp))
-        fs.appendFileSync(fp, content, 'utf-8')
+        appendWithNewline(fp, String(content ?? ''))
         return { ok: true, notice: backup ? `已自动备份原文件到 ${path.basename(path.dirname(backup))}/` : undefined }
       } catch (e: any) {
         return { ok: false, error: e.message }
@@ -788,7 +906,7 @@ if (!gotTheLock) {
       }
     })
 
-    // 复制文件（仅支持文件，目标已存在时报错）
+    // 复制文件或目录（目标已存在时报错）
     ipcMain.handle('agent:copyFile', (_, root: string, relPath: string, newRelPath: string) => {
       try {
         const fp = assertInsideRoot(root, resolveInsideRoot(root, relPath))
@@ -796,9 +914,14 @@ if (!gotTheLock) {
         const blocked = guardFile(fp) || guardFile(np)
         if (blocked) return { ok: false, error: blocked }
         if (!fs.existsSync(fp)) return { ok: false, error: '源路径不存在' }
-        if (fs.statSync(fp).isDirectory()) return { ok: false, error: '暂不支持复制目录，仅支持文件' }
         if (fs.existsSync(np)) return { ok: false, error: `目标路径已存在: ${newRelPath}` }
         ensureDir(path.dirname(np))
+        const stat = fs.statSync(fp)
+        // 目录：递归复制（支持整目录拷贝）；文件：直接复制
+        if (stat.isDirectory()) {
+          copyRecursive(fp, np)
+          return { ok: true, output: `已复制目录 ${relPath} → ${newRelPath}` }
+        }
         fs.copyFileSync(fp, np)
         return { ok: true }
       } catch (e: any) {
@@ -1033,12 +1156,16 @@ if (!gotTheLock) {
       if (!r.ok) {
         return { ok: false, error: `搜索失败：${r.errors.join('；') || '无可用引擎'}`, engine: r.engine }
       }
-      const lines = r.results.map((item, i) => `${i + 1}. ${item.title}\n   ${item.url}\n   ${item.snippet || '(无摘要)'}`)
+      // 摘要截断 + 同 URL 去重，避免长摘要挤爆上下文、重复结果干扰模型判断
+      const cap = (s: string, n = 160) => (s && s.length > n ? s.slice(0, n) + '…' : s || '(无摘要)')
+      const seen = new Set<string>()
+      const deduped = r.results.filter(it => { if (seen.has(it.url)) return false; seen.add(it.url); return true })
+      const lines = deduped.map((item, i) => `${i + 1}. ${item.title}\n   ${item.url}\n   ${cap(item.snippet)}`)
       return {
         ok: true,
         engine: r.engine,
-        count: r.results.length,
-        output: `搜索「${q}」，引擎 ${r.engine}，共 ${r.results.length} 条：\n\n${lines.join('\n\n')}\n\n（如需正文，用 web_fetch 抓取其中某个链接）`,
+        count: deduped.length,
+        output: `搜索「${q}」，引擎 ${r.engine}，共 ${deduped.length} 条：\n\n${lines.join('\n\n')}\n\n（如需正文，用 web_fetch 抓取其中某个链接）`,
         notice: notices.length > 0 ? Array.from(new Set(notices)).join('；') : undefined,
       }
     })
@@ -1066,6 +1193,61 @@ if (!gotTheLock) {
         title: r.title,
         output: summarizePage(r.url, r.title, r.text, cap),
         notice,
+      }
+    })
+
+    // ---------- 任务清单（TodoWrite）：让 AI 在多步任务里显式建清单、勾完成、查看进度 ----------
+    // 直接针对「做到一半就说完成 / 漏做步骤」的问题。清单按工作目录隔离，存于 .deepwork/todos.json。
+    ipcMain.handle('agent:todo', (_, root: string, action: string, payload?: { content?: string; index?: number; status?: string }) => {
+      try {
+        const dir = path.join(root, '.deepwork')
+        const file = path.join(dir, 'todos.json')
+        const load = (): Array<{ content: string; status: 'pending' | 'completed'; createdAt: number }> => {
+          try { return JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { return [] }
+        }
+        const save = (list: any[]) => { ensureDir(dir); fs.writeFileSync(file, JSON.stringify(list, null, 2), 'utf-8') }
+        const render = (list: any[]) => {
+          if (list.length === 0) return '任务清单为空（用 action:"add" 添加第一条）'
+          const done = list.filter((t: any) => t.status === 'completed').length
+          const lines = list.map((t: any, i: number) => `${i + 1}. [${t.status === 'completed' ? '✓' : ' '}] ${t.content}`)
+          return `任务清单（共 ${list.length}，已完成 ${done}）：\n${lines.join('\n')}`
+        }
+        const a = String(action || 'list').toLowerCase()
+        if (a === 'add') {
+          const content = String(payload?.content ?? '').trim()
+          if (!content) return { ok: false, error: 'add 缺少 content 参数' }
+          const list = load()
+          list.push({ content, status: 'pending', createdAt: Date.now() })
+          save(list)
+          return { ok: true, output: '已添加任务。\n' + render(list) }
+        }
+        if (a === 'update') {
+          const idx = Number(payload?.index)
+          const content = String(payload?.content ?? '').trim()
+          if (!idx || !content) return { ok: false, error: 'update 需要 index 与 content' }
+          const list = load()
+          if (idx < 1 || idx > list.length) return { ok: false, error: `index ${idx} 超出范围（共 ${list.length}）` }
+          list[idx - 1].content = content
+          save(list)
+          return { ok: true, output: '已更新任务。\n' + render(list) }
+        }
+        if (a === 'complete') {
+          const idx = Number(payload?.index)
+          if (!idx) return { ok: false, error: 'complete 需要 index' }
+          const list = load()
+          if (idx < 1 || idx > list.length) return { ok: false, error: `index ${idx} 超出范围（共 ${list.length}）` }
+          list[idx - 1].status = 'completed'
+          save(list)
+          return { ok: true, output: '已标记完成。\n' + render(list) }
+        }
+        if (a === 'clear') {
+          save([])
+          return { ok: true, output: '任务清单已清空' }
+        }
+        // 默认 list
+        return { ok: true, output: render(load()) }
+      } catch (e: any) {
+        return { ok: false, error: e.message }
       }
     })
 
@@ -1139,6 +1321,42 @@ if (!gotTheLock) {
       }
     })
 
+    // ---------- Agent 包（在线市场双线路：Agent = 人格 + 技能组合）----------
+    ipcMain.handle('agents:list', async () => {
+      try {
+        return await listAgents(userDataPath)
+      } catch (e: any) {
+        return { ok: false, error: e?.message || '读取 Agent 列表失败', agents: [], localOnly: [] }
+      }
+    })
+
+    ipcMain.handle('agents:get', (_, id: string) => {
+      const aid = String(id ?? '').trim()
+      try {
+        return getAgent(userDataPath, aid)
+      } catch (e: any) {
+        return { ok: false, error: e?.message || '读取 Agent 失败' }
+      }
+    })
+
+    ipcMain.handle('agents:install', async (_, id: string) => {
+      const aid = String(id ?? '').trim()
+      try {
+        return await installAgent(userDataPath, aid)
+      } catch (e: any) {
+        return { ok: false, error: e?.message || 'Agent 安装失败' }
+      }
+    })
+
+    ipcMain.handle('agents:uninstall', (_, id: string) => {
+      const aid = String(id ?? '').trim()
+      try {
+        return uninstallAgent(userDataPath, aid)
+      } catch (e: any) {
+        return { ok: false, error: e?.message || 'Agent 卸载失败' }
+      }
+    })
+
     ipcMain.handle('app:getInfo', () => ({
       version: app.getVersion(),
       name: app.getName(),
@@ -1148,6 +1366,63 @@ if (!gotTheLock) {
       platform: process.platform,
       arch: process.arch,
     }))
+
+    // ---------- 应用更新（免安装版补丁热替换）----------
+    // 更新源：version.json + 补丁 zip 同目录，地址由 UPDATE_BASE_URL 决定（默认占位，生产走文汇百川公开 URL）
+    ipcMain.handle('app:checkUpdate', async () => {
+      return await checkUpdate(UPDATE_BASE_URL, currentVersion())
+    })
+
+    ipcMain.handle('app:downloadUpdate', async (_, patchUrl: string, sha256: string | null) => {
+      const r = await downloadAndApply(patchUrl, sha256, getAppDir())
+      if (r.ok) {
+        // 应用成功 → 重启生效（新进程加载已替换的 resources/app）
+        setTimeout(() => {
+          app.relaunch({ args: process.argv.slice(1) })
+          app.exit(0)
+        }, 600)
+      }
+      return r
+    })
+
+    // 启动独立更新器（update.exe）：由它下载并替换整个 app 文件夹，主程序随后退出
+    ipcMain.handle('app:launchUpdater', async () => {
+      try {
+        const appDir = path.dirname(process.execPath)
+        const updaterPath = path.join(appDir, 'update.exe')
+        if (!fs.existsSync(updaterPath)) {
+          return { ok: false, error: '未找到 update.exe（请重新安装或手动更新）' }
+        }
+        const child = spawn(
+          updaterPath,
+          ['--app-dir', appDir, '--exe-name', path.basename(process.execPath), '--current-version', app.getVersion()],
+          { detached: true, stdio: 'ignore', windowsHide: true },
+        )
+        child.unref()
+        // 给渲染进程一点时间拿到返回值，再关闭主程序把控制权交给更新器
+        setTimeout(() => app.quit(), 300)
+        return { ok: true }
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message || e) }
+      }
+    })
+
+    // 启动独立卸载器（uninstall.exe）：由它删除 app 文件夹，主程序随后退出
+    ipcMain.handle('app:launchUninstaller', async () => {
+      try {
+        const appDir = path.dirname(process.execPath)
+        const uninstPath = path.join(appDir, 'uninstall.exe')
+        if (!fs.existsSync(uninstPath)) {
+          return { ok: false, error: '未找到 uninstall.exe（请手动删除程序文件夹）' }
+        }
+        const child = spawn(uninstPath, [], { detached: true, stdio: 'ignore', windowsHide: true })
+        child.unref()
+        setTimeout(() => app.quit(), 300)
+        return { ok: true }
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message || e) }
+      }
+    })
 
     // 打开备份目录（安全中心 → 自动备份）
     // 主题同步：让原生控件（滚动条 / 系统对话框）也跟随深浅色

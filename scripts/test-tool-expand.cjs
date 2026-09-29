@@ -70,15 +70,15 @@ vm.createContext(ctx)
 vm.runInContext(js, ctx)
 const ToolActionLine = ctx.api.ToolActionLine
 
-// 4. 渲染「已读取 围棋.html」行（detail 与真实落盘数据同构：kind=text, 2019 字符）
+// 4. 渲染「读取 围棋.html」行（detail 与真实落盘数据同构：kind=text, 2019 字符）
 const detail = { kind: 'text', text: 'A'.repeat(2019) }
 const root = ReactDOM.createRoot(document.getElementById('root'))
-root.render(React.createElement(ToolActionLine, { content: '已读取 围棋.html', detail }))
+root.render(React.createElement(ToolActionLine, { content: '读取 围棋.html', detail }))
 
 setTimeout(() => {
   const html0 = document.getElementById('root').innerHTML
   console.log('== 渲染后（点击前）==')
-  console.log('含行文字:', html0.includes('已读取 围棋.html'))
+  console.log('含行文字:', html0.includes('读取 围棋.html'))
   console.log('含展开面板内容:', html0.includes('A'.repeat(50)))
   console.log('含 chevron(svg):', html0.includes('svg'))
 

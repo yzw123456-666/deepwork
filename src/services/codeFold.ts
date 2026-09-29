@@ -93,3 +93,78 @@ export function sanitizeThinkingDisplay(content: string): string {
   if (!content) return content
   return foldBareCode(foldFenceBlocks(content))
 }
+
+// ---------- 代码草稿可展开单元（2026-09-24 用户要求「代码草稿也可以展开看看草稿内容是什么」） ----------
+// 显示层从「折叠成一行占位、内容丢弃」升级为「占位行可点击展开看草稿原文」：
+// parseThinkingUnits 把思考内容解析成 text / code 单元序列，ThinkingBlock 据此渲染，
+// code 单元渲染为可展开的 CodeDraftBlock（默认仍折叠成「📄 代码草稿（未写入文件）」一行）。
+// 折叠边界与 sanitizeThinkingDisplay 完全同一套规则（foldFenceBlocks / foldBareCode），
+// 只是从「替换成占位行」变成「保留原文交给 UI 折叠」——落盘原文本就保留，现在显示层也不丢。
+
+export type ThinkingUnit = { kind: 'text'; text: string } | { kind: 'code'; code: string }
+
+// 与 foldFenceBlocks 前两轮 replace 同一套模式：闭合围栏 / 未闭合围栏（流式中）/ 闭合 HTML 文档
+const RE_THINKING_CODE_BLOCK = /```[^\n]*\n[\s\S]*?```|```[^\n]*\n[\s\S]*$|<!DOCTYPE[^>]*>[\s\S]*?<\/html\s*>|<html[^>]*>[\s\S]*?<\/html\s*>/gi
+
+// 与 foldFenceBlocks 第三轮同款：行首开始的未闭合 HTML 文档（直到结尾）
+const RE_UNCLOSED_DOC = /(^|\n)\s*<!DOCTYPE[^>]*>[\s\S]*$|(^|\n)\s*<html[^>]*>[\s\S]*$/i
+
+/** 纯文本段：先切行首未闭合 HTML 文档，再按 foldBareCode 的行走规则切无围栏裸代码 */
+function pushTextSegment(text: string, units: ThinkingUnit[]): void {
+  if (!text) return
+  const m = RE_UNCLOSED_DOC.exec(text)
+  if (m && m.index !== undefined) {
+    pushTextSegment(text.slice(0, m.index), units)
+    units.push({ kind: 'code', code: m[0] })
+    return
+  }
+  // 无围栏裸代码：与 foldBareCode 同步的行走逻辑——连续 ≥3 行代码特征行（允许段内空行）成段
+  let textLines: string[] = []
+  let buf: string[] = []
+  let codeCount = 0
+  const flushText = () => {
+    if (textLines.length) {
+      units.push({ kind: 'text', text: textLines.join('\n') })
+      textLines = []
+    }
+  }
+  const flushBuf = () => {
+    if (codeCount >= 3) {
+      flushText()                              // 代码段之前的正文先落位
+      units.push({ kind: 'code', code: buf.join('\n') })
+    } else {
+      textLines.push(...buf)                   // 不成段的代码样行还原成正文（防误伤）
+    }
+    buf = []
+    codeCount = 0
+  }
+  for (const line of text.split('\n')) {
+    if (isCodeLine(line)) {
+      buf.push(line)
+      codeCount++
+    } else if (!line.trim()) {
+      if (buf.length) buf.push(line)           // 段内空行
+      else textLines.push(line)
+    } else {
+      flushBuf()
+      textLines.push(line)
+    }
+  }
+  flushBuf()
+  flushText()
+}
+
+/** 思考内容 → text / code 单元序列（code 单元 = 代码草稿原文，UI 渲染为可展开块） */
+export function parseThinkingUnits(content: string): ThinkingUnit[] {
+  if (!content) return []
+  const units: ThinkingUnit[] = []
+  let last = 0
+  for (const m of content.matchAll(RE_THINKING_CODE_BLOCK)) {
+    const idx = m.index ?? 0
+    if (idx > last) pushTextSegment(content.slice(last, idx), units)
+    units.push({ kind: 'code', code: m[0] })
+    last = idx + m[0].length
+  }
+  if (last < content.length) pushTextSegment(content.slice(last), units)
+  return units
+}

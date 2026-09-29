@@ -111,11 +111,11 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
   standaloneConvs.sort((a, b) => b.updatedAt - a.updatedAt)
 
   /* ---------- 操作 ---------- */
-  const confirmNeeded = () => (useAppStore.getState().config as any).confirmBeforeDelete ?? true
 
   const handleDeleteTask = (e: React.MouseEvent, task: Task) => {
     e.stopPropagation()
-    if (!confirmNeeded() || window.confirm(`确定要删除任务「${task.name}」吗？\n（任务下的对话会保留，变为独立对话）`)) {
+    // 删除任务是不可逆操作，固定弹确认框，不受「删除前确认」开关影响
+    if (window.confirm(`确定要删除任务「${task.name}」吗？\n（任务下的对话会保留，变为独立对话）`)) {
       // 任务下对话的解绑由 store.deleteTask 统一处理
       deleteTask(task.id)
       if (useAppStore.getState().currentTask?.id === task.id) {
@@ -161,7 +161,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
 
   const handleDeleteConversation = (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    if (!confirmNeeded() || window.confirm('确定要删除这个对话吗？')) {
+    // 删除对话同样固定弹确认框，防止误删
+    if (window.confirm('确定要删除这个对话吗？')) {
       deleteConversation(id)
       if (currentConversation?.id === id) {
         setCurrentConversation(null)
@@ -284,8 +285,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
           nested ? 'pl-8 pr-2 py-1.5 ml-2' : 'pl-3 pr-2 py-2'
         } ${
           isActive
-            ? 'bg-primary-50 text-primary-600'
-            : 'text-gray-600 hover:bg-gray-50'
+            ? 'bg-primary-500/10 text-primary-600'
+            : 'text-gray-600 hover:bg-black/5'
         }`}
       >
         <MessageSquare size={13} className={`flex-shrink-0 ${isActive ? 'text-primary-500' : 'text-gray-400'}`} />
@@ -332,7 +333,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
     const nestedConvs = convsByTask.get(task.id) || []
     const isActive = useAppStore.getState().currentConversation?.taskId === task.id
     return (
-      <div key={task.id} className="mb-0.5">
+      <div key={task.id} className="mb-1">
         <div
           onClick={() => {
             if (editing?.id === task.id) return
@@ -341,8 +342,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
           }}
           className={`group flex items-center gap-1.5 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
             isActive
-              ? 'bg-primary-50 text-primary-600'
-              : 'text-gray-600 hover:bg-gray-50'
+              ? 'bg-primary-500/10 text-primary-600'
+              : 'text-gray-600 hover:bg-black/5'
           }`}
         >
           <button
@@ -404,9 +405,9 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
             </button>
           </div>
         </div>
-        {/* 展开的对话列表 */}
+        {/* 展开的对话列表（与任务块留缝，玻璃/透明模式下不粘连） */}
         {expanded && nestedConvs.length > 0 && (
-          <div className="border-l border-gray-100 ml-4">
+          <div className="border-l border-gray-200/70 ml-4 mt-0.5 pb-0.5">
             {nestedConvs.map(c => renderConversationRow(c, true))}
           </div>
         )}
@@ -419,7 +420,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
 
   return (
     <div
-      className={`bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
+      className={`bg-white border-r border-gray-200 flex flex-col transition-all duration-300 app-sidebar-root ${
         collapsed ? 'w-16' : 'w-64'
       }`}
     >
@@ -444,8 +445,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
             onClick={() => setActivePage(item.id)}
             className={`w-full flex items-center gap-3 px-3 py-2 text-sm rounded-lg transition-colors ${
               activePage === item.id
-                ? 'bg-primary-50 text-primary-600'
-                : 'text-gray-600 hover:bg-gray-50'
+                ? 'bg-primary-500/10 text-primary-600'
+                : 'text-gray-600 hover:bg-black/5'
             }`}
           >
             <item.icon size={18} />
@@ -496,14 +497,14 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
                 <>
                   <button
                     onClick={() => handleStartRenameTask(task)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-600 hover:bg-black/5"
                   >
                     <Pencil size={14} className="text-gray-500" />
                     重命名
                   </button>
                   <button
                     onClick={() => handleOpenTaskFolder(task)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-600 hover:bg-black/5"
                   >
                     <FolderOpenDot size={14} className="text-gray-500" />
                     打开任务文件夹
@@ -544,7 +545,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
               const isChecking = checking === model.id
               const isMainModel = mainModelIds.has(model.id)
               return (
-                <div key={model.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50">
+                <div key={model.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-black/5">
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                     isChecking ? 'bg-gray-300 animate-pulse' : (isOnline ? 'bg-green-500' : 'bg-red-500')
                   }`} title={isOnline ? '在线' : '离线'} />
@@ -578,7 +579,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggle, onSettings }) =>
       <div className="border-t border-gray-200 p-2">
         <button
           onClick={onSettings}
-          className="w-full flex items-center gap-3 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors"
+          className="w-full flex items-center gap-3 px-3 py-2 text-sm text-gray-600 hover:bg-black/5 rounded-lg transition-colors"
         >
           <Settings size={18} />
           {!collapsed && <span>{t('nav.settings')}</span>}

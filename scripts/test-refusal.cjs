@@ -150,7 +150,7 @@ ok('句中提及 <html> 不误伤', dropCodeBlocks(mentionHtml) === mentionHtml,
 
 console.log('\n===== 5. 引擎层：代码块阈值 + 兜底剥离 =====')
 const engineSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agentEngine.ts'), 'utf8')
-const fnSrc = grabFn(engineSrc, 'stripThinkForCheck') + '\n' + grabFn(engineSrc, 'hasUnsavedCodeBlock') + '\n' + grabFn(engineSrc, 'stripCodeBlocks')
+const fnSrc = grabFn(engineSrc, 'hasUnsavedCodeBlock') + '\n' + grabFn(engineSrc, 'stripCodeBlocks')
 const ejs = ts.transpileModule(fnSrc + '\nmodule.exports = { hasUnsavedCodeBlock, stripCodeBlocks }', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText

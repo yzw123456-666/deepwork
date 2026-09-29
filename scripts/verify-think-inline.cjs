@@ -38,6 +38,16 @@ function grabComponent(name) {
 }
 const codeNote = (src.match(/const CODE_NOTE = .+/) || [''])[0]
 
+// 2026-09-24 起 ThinkingBlock 显示层走 parseThinkingUnits（代码草稿可展开单元）——
+// 整文件转译 codeFold，通过 vm 全局注入（组件内裸标识符解析到 ctx 全局）
+const cfJs = ts.transpileModule(
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'codeFold.ts'), 'utf8'),
+  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }
+).outputText
+const cfPath = path.join(__dirname, '..', '.temp-codefold-verify.cjs')
+fs.writeFileSync(cfPath, cfJs)
+const cf = require(cfPath)
+
 const parts = [
   codeNote,
   grabConst('TOOL_ALIAS'),
@@ -50,18 +60,18 @@ const parts = [
   grabComponent('DiffLine'),
   grabComponent('ToolDetailPanel'),
   grabComponent('ToolActionLine'),
+  grabComponent('CodeDraftBlock'),
   grabComponent('ThinkingBlock'),
 ]
 const raw = `
 const { useState, useMemo, useEffect } = React;
 const { CheckCircle2, XCircle, Loader2, ChevronRight } = lucide;
 const useTranslation = () => ({ t: (k) => k });
-const replaceCodeBlocksWithEdit = (s) => s;  // 思考清洗与结构无关，直通
 ${parts.join('\n')}
 this.api = { ThinkingBlock };
 `
 const js = ts.transpileModule(raw, { compilerOptions: { target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React, jsxFactory: 'React.createElement' } }).outputText
-const ctx = { React, lucide, console, window: dom.window, document: dom.window.document, navigator: dom.window.navigator }
+const ctx = { React, lucide, console, window: dom.window, document: dom.window.document, navigator: dom.window.navigator, parseThinkingUnits: cf.parseThinkingUnits }
 vm.createContext(ctx)
 vm.runInContext(js, ctx)
 const ThinkingBlock = ctx.api.ThinkingBlock
@@ -103,8 +113,14 @@ setTimeout(() => {
   const toolsInside = block ? block.querySelectorAll('.cursor-pointer').length : 0
   console.log('深度思考区容器内可点击行数（工具行）:', toolsInside)
   // 顺序验证：第一个工具行文本是否出现在思考内容之间（不是全部在末尾）
+  // 渐进式查找：工具行内容可能重复（如两次「已读取 围棋.html」），必须从上次命中位置之后找下一个
   const toolTexts = tools.map(t => String(t.content).replace(/^✅\s*/, '').slice(0, 12))
-  const positions = toolTexts.map(tt => text.indexOf(tt))
+  let cursor = 0
+  const positions = toolTexts.map(tt => {
+    const p = text.indexOf(tt, cursor)
+    if (p >= 0) cursor = p + tt.length
+    return p
+  })
   console.log('各工具行在文本流中的位置:', positions.join(', '))
   const allAtEnd = positions.every((p, i) => i === 0 || p > positions[i - 1])
   const monotonic = positions.every(p => p >= 0)

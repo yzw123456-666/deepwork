@@ -77,6 +77,19 @@ for (const app of targets) {
   if (fs.existsSync(srcIcon)) {
     fs.copyFileSync(srcIcon, path.join(app, '..', 'icon.png'))
   }
+  // 更新器 / 卸载器：随 app 分发到免安装目录根（update.exe 与 deepwork.exe 同级）
+  const updaterDist = path.join(srcApp, 'tools', 'updater', 'dist')
+  const updaterSrc = path.join(srcApp, 'tools', 'updater')
+  const rootDir = path.dirname(path.dirname(app)) // .../deepwork-XX
+  const extraFiles = [
+    [path.join(updaterDist, 'update.exe'), 'update.exe'],
+    [path.join(updaterDist, 'uninstall.exe'), 'uninstall.exe'],
+    [path.join(updaterSrc, 'sources.json'), 'sources.json'],
+  ]
+  for (const [src, name] of extraFiles) {
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(rootDir, name))
+    else console.log('  （未找到 ' + name + '，跳过：请先 python tools/updater/build.py）')
+  }
   console.log('✓ 已同步 ' + rel)
 }
 

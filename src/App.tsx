@@ -25,6 +25,7 @@ import {
   PenLine,
   Loader2,
   Wrench,
+  Puzzle,
   ImagePlus,
   Video,
   Eye,
@@ -34,11 +35,11 @@ import {
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
-import SettingsPanel from './components/SettingsPanel'
+import WallpaperLayer from './components/WallpaperLayer'
 import CreateTaskDialog from './components/CreateTaskDialog'
 import TaskSettings from './components/TaskSettings'
 import { useAppStore } from './stores'
-import { DirTreeItem, InstalledSkill } from './types/electron'
+import { DirTreeItem, InstalledSkill, AgentListItem } from './types/electron'
 import { AIToolConfig, AIToolId, Conversation } from './types'
 import { v4 as uuidv4 } from 'uuid'
 import { invalidateSkillCatalog } from './services/agentEngine'
@@ -267,8 +268,20 @@ const ExpertsPage: React.FC = () => {
 
   useEffect(() => { refreshInstalled() }, [refreshInstalled])
 
+  // SkillHub 列表缓存（2026-09-29 性能优化）：模块级 5 分钟 TTL，
+  // 每次进技能市场/切 tab 不再白屏重拉第一页；搜索与加载更多不受缓存影响。
+  const skillhubCache = (window as any).__skillhubPageCache ||= { page1: null as any[] | null, at: 0 }
+  const SKILLHUB_CACHE_TTL = 5 * 60 * 1000
+
   // 实时从 SkillHub API 获取技能（按下载量排序）
   const fetchSkillhub = useCallback(async (pageNum: number, append = false) => {
+    // 第一页命中缓存 → 直接用，不请求
+    if (pageNum === 1 && !append && skillhubCache.page1 && Date.now() - skillhubCache.at < SKILLHUB_CACHE_TTL) {
+      setSkillhubSkills(skillhubCache.page1)
+      setHasMore(true)
+      setInitialLoading(false)
+      return
+    }
     setLoadingMore(true)
     try {
       const resp = await fetch(`https://api.skillhub.cn/api/skills?page=${pageNum}&pageSize=50&sortBy=downloads`, {
@@ -295,6 +308,11 @@ const ExpertsPage: React.FC = () => {
           setSkillhubSkills(prev => [...prev, ...mapped])
         } else {
           setSkillhubSkills(mapped)
+          // 只缓存第一页
+          if (pageNum === 1) {
+            skillhubCache.page1 = mapped
+            skillhubCache.at = Date.now()
+          }
         }
         setHasMore(data.data.skills.length === 50)
       }
@@ -1204,12 +1222,195 @@ const AIToolsPage: React.FC = () => {
   )
 }
 
+// Agent 市场页面：Agent 包 = 专属人格 + 成套技能
+// 真实在线下载：清单托管在文汇百川（主）+ GitHub Releases（兜底），离线时只能管理已安装
+const AgentsPage: React.FC = () => {
+  const [agents, setAgents] = useState<AgentListItem[]>([])
+  const [localOnly, setLocalOnly] = useState<AgentListItem[]>([])
+  const [online, setOnline] = useState(true)
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await window.electronAPI?.agents?.list()
+      setAgents(r?.ok && Array.isArray(r.agents) ? r.agents : [])
+      setLocalOnly(r?.ok && Array.isArray(r.localOnly) ? r.localOnly : [])
+      setOnline(r?.online !== false)
+    } catch {
+      setAgents([])
+      setLocalOnly([])
+      setOnline(false)
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const notify = (type: 'ok' | 'err', text: string) => {
+    setActionMsg({ type, text })
+    window.setTimeout(() => setActionMsg(null), type === 'err' ? 5000 : 3000)
+  }
+
+  const handleInstall = async (p: AgentListItem) => {
+    setBusyId(p.id)
+    try {
+      const r = await window.electronAPI?.agents?.install(p.id)
+      if (r?.ok) {
+        // Agent 技能落进了技能目录：让 agent 侧技能清单缓存立即失效
+        invalidateSkillCatalog()
+        notify('ok', `「${p.name}」安装成功，新建任务时即可选用`)
+        await refresh()
+      } else {
+        notify('err', `安装失败：${r?.error || '未知错误'}`)
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleUninstall = async (p: AgentListItem) => {
+    if (!window.confirm(`确定要卸载 Agent「${p.name}」吗？\n（其附带的技能会一并移除）`)) return
+    setBusyId(p.id)
+    try {
+      const r = await window.electronAPI?.agents?.uninstall(p.id)
+      if (r?.ok) {
+        invalidateSkillCatalog()
+        notify('ok', `「${p.name}」已卸载`)
+        await refresh()
+      } else {
+        notify('err', `卸载失败：${r?.error || '未知错误'}`)
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const renderAgentCard = (p: AgentListItem, i: number) => (
+    <div key={p.id} className="animate-rise-in" style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}>
+    <div className="bg-white border border-gray-200 rounded-xl p-5 flex flex-col hover:shadow-md transition-shadow">
+      <div className="flex items-start gap-3">
+        <div className="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center text-2xl flex-shrink-0">
+          {p.icon || '🧩'}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-gray-800 truncate">{p.name}</h3>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 flex-shrink-0">v{p.version}</span>
+            {p.installed && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-600 flex-shrink-0">已安装</span>
+            )}
+          </div>
+          <p className="text-sm text-gray-500 mt-1 line-clamp-2">{p.description}</p>
+        </div>
+      </div>
+
+      {/* 包内容标签 */}
+      <div className="flex flex-wrap items-center gap-1.5 mt-3">
+        <span className="text-[11px] px-2 py-1 rounded-md bg-purple-50 text-purple-600">🤖 agent ×{p.agentCount}</span>
+        {p.skillNames.map(n => (
+          <span key={n} className="text-[11px] px-2 py-1 rounded-md bg-blue-50 text-blue-600">⚡ {n}</span>
+        ))}
+      </div>
+
+      <div className="flex-1" />
+
+      <div className="mt-4 flex items-center justify-between">
+        <span className="text-xs text-gray-400">
+          {p.installed ? `安装于 ${new Date(p.installedAt).toLocaleDateString('zh-CN')}` : '未安装'}
+        </span>
+        {p.installed ? (
+          <button
+            onClick={() => handleUninstall(p)}
+            disabled={busyId === p.id}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-red-500 border border-red-200 hover:bg-red-50 disabled:opacity-60 transition-colors"
+          >
+            {busyId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            卸载
+          </button>
+        ) : (
+          <button
+            onClick={() => handleInstall(p)}
+            disabled={busyId === p.id}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-60 transition-colors"
+          >
+            {busyId === p.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            安装
+          </button>
+        )}
+      </div>
+    </div>
+    </div>
+  )
+
+  return (
+    <div className="flex-1 p-8 overflow-y-auto">
+      <div className="max-w-4xl">
+        <h1 className="text-2xl font-bold text-gray-800 mb-2">Agent</h1>
+        <p className="text-sm text-gray-500 mb-6">
+          Agent 包 = 专属人格 + 成套技能的组合，从 Agent 源在线下载安装。安装后，在「新建任务」里即可选择使用。
+        </p>
+
+        {/* 离线状态：无法连接 Agent 源 */}
+        {!loading && !online && (
+          <div className="mb-4 px-4 py-2.5 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-700 flex items-center gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0" />
+            <span className="flex-1">无法连接 Agent 源（离线或网络受限），仅可管理本地已安装的 Agent。</span>
+            <button onClick={() => { setLoading(true); refresh() }} className="text-xs text-amber-800 underline hover:no-underline flex-shrink-0">重试</button>
+          </div>
+        )}
+
+        {actionMsg && (
+          <div className={`mb-4 px-4 py-2.5 rounded-lg text-sm border ${
+            actionMsg.type === 'ok'
+              ? 'bg-green-50 border-green-200 text-green-700'
+              : 'bg-red-50 border-red-200 text-red-600'
+          }`}>
+            {actionMsg.text}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-20 text-gray-400">
+            <Loader2 size={20} className="animate-spin mr-2" /> 正在连接 Agent 源…
+          </div>
+        ) : (
+          <>
+            {agents.length > 0 && (
+              <div className="grid grid-cols-2 gap-4">
+                {agents.map((p, i) => renderAgentCard(p, i))}
+              </div>
+            )}
+            {agents.length === 0 && localOnly.length === 0 && (
+              <div className="text-center text-gray-400 py-20">
+                {online ? 'Agent 市场暂无可用 Agent' : '离线状态，且本地没有已安装的 Agent'}
+              </div>
+            )}
+            {localOnly.length > 0 && (
+              <>
+                {agents.length > 0 && (
+                  <h2 className="text-sm font-medium text-gray-500 mt-8 mb-3">本地保留（Agent 源已下架，仅可卸载）</h2>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  {localOnly.map((p, i) => renderAgentCard(p, i))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // 更多页面
 const MorePage: React.FC = () => {
   const { setActivePage } = useAppStore()
 
   const items = [
     { icon: Wrench, title: 'AI 工具', desc: '图片/视频生成与理解的专用 AI 配置', color: 'text-purple-500', bgColor: 'bg-purple-50', page: 'aiTools' },
+    { icon: Puzzle, title: 'Agent', desc: '安装 Agent 包：专属人格 + 技能组合', color: 'text-amber-500', bgColor: 'bg-amber-50', page: 'agents' },
     { icon: BarChart3, title: 'Token 用量', desc: '查看 API Token 消耗统计', color: 'text-blue-500', bgColor: 'bg-blue-50', page: 'tokenUsage' },
   ]
 
@@ -1222,7 +1423,8 @@ const MorePage: React.FC = () => {
             <div
               key={i}
               onClick={() => item.page && setActivePage(item.page)}
-              className={`bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer`}
+              className={`animate-rise-in bg-white border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow cursor-pointer`}
+              style={{ animationDelay: `${i * 50}ms` }}
             >
               <div className={`w-12 h-12 ${item.bgColor} rounded-xl flex items-center justify-center mb-3`}>
                 <item.icon size={24} className={item.color} />
@@ -1239,7 +1441,20 @@ const MorePage: React.FC = () => {
 
 function App() {
   const { i18n } = useTranslation()
-  const { loaded, loadAll, loadError, config, showSettings, activePage } = useAppStore()
+  const { loaded, loadAll, loadError, config, activePage } = useAppStore()
+  // 主页面左下角更新提示
+  const [appUpdate, setAppUpdate] = useState<{ hasUpdate?: boolean; latest?: string; notes?: string }>({})
+
+  // 启动即检测更新（仅用于左下角提示，不自动下载；实际下载由 update.exe 完成）
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI?.app.checkUpdate?.().then((r: any) => {
+      if (!cancelled && r?.ok && r.hasUpdate) {
+        setAppUpdate({ hasUpdate: true, latest: r.latest, notes: r.notes })
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     loadAll().then(() => {
@@ -1253,7 +1468,7 @@ function App() {
     document.documentElement.style.fontSize = fontSizeMap[size] || '100%'
   }, [(config as any).fontSize])
 
-  // 主题：light / dark / system（跟随系统时实时响应系统切换）；accent 为主题色
+  // 主题：light / dark / system（跟随系统时实时响应系统切换）；accent 主题色与壁纸叠加生效。
   useEffect(() => {
     const mode = (config as any).theme ?? 'light'
     const accent = (config as any).accent || 'sky'
@@ -1278,6 +1493,24 @@ function App() {
       else mq.removeListener(onChange)
     }
   }, [(config as any).theme, (config as any).accent])
+
+  // 应用壁纸（2026-09-25）：html[data-wallpaper] 激活骨架透明规则（index.css 末段），
+  // --wp-blur 控制全局玻璃强度（2026-09-25 晚升级：不只侧栏，标题栏/侧栏/内容区一起毛玻璃化；
+  // blur=0 → data-wp-glass="0" 全部直接透壁纸，弹窗不受影响）。壁纸层组件按需挂载。
+  useEffect(() => {
+    const wp = (config as any).wallpaper
+    const on = !!(wp && wp.type && wp.type !== 'none' && (wp.value || wp.type === 'builtin'))
+    const root = document.documentElement
+    if (on) {
+      root.setAttribute('data-wallpaper', '1')
+      const blur = Math.min(Math.max(typeof wp.blur === 'number' ? wp.blur : 18, 0), 30)
+      root.style.setProperty('--wp-blur', `${blur}px`)
+      root.setAttribute('data-wp-glass', blur > 0 ? '1' : '0')
+    } else {
+      root.removeAttribute('data-wallpaper')
+      root.removeAttribute('data-wp-glass')
+    }
+  }, [(config as any).wallpaper])
 
   // 小窗口自适应：宽度不足 960 自动收起侧边栏（把空间让给内容区），
   // 恢复到 1120 以上且之前是「自动收起」的才自动展开；用户手动收起的不动。
@@ -1365,14 +1598,23 @@ function App() {
         store.setCurrentConversation(null)
         store.setActivePage('chat')
       } else if (action === 'shortcutOpenSettings') {
-        store.setShowSettings(!store.showSettings)
+        // 设置页 = 独立窗口（2026-09-25），不再是主窗口弹层
+        window.electronAPI?.app.openSettings?.()
       } else if (action === 'shortcutToggleSidebar') {
         toggleSidebarUnified()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [loaded, showSettings, config.sidebarCollapsed, config.shortcutNewChat, config.shortcutOpenSettings, config.shortcutToggleSidebar, toggleSidebarUnified])
+  }, [loaded, config.sidebarCollapsed, config.shortcutNewChat, config.shortcutOpenSettings, config.shortcutToggleSidebar, toggleSidebarUnified])
+
+  // 接收设置独立窗口的配置变更广播，主窗口实时同步（主题/壁纸/模型等立即生效）
+  useEffect(() => {
+    return window.electronAPI?.config.onChange?.((key, value) => {
+      const cur = useAppStore.getState().config as any
+      useAppStore.setState({ config: { ...cur, [key]: value } })
+    })
+  }, [])
 
   if (!loaded) {
     return (
@@ -1388,23 +1630,33 @@ function App() {
   }
 
   const renderPage = () => {
-    switch (activePage) {
-      case 'projects': return <ProjectsPage />
-      case 'experts': return <ExpertsPage />
-      case 'automation': return <AutomationPage />
-      case 'resources': return <ResourcesPage />
-      case 'more': return <MorePage />
-      case 'aiTools': return <AIToolsPage />
-      case 'tokenUsage': return <TokenUsagePage />
-      default: return <ChatArea />
-    }
+    // 页面切换过渡：key 随 activePage 变化触发重挂载 → 整页播放 pageIn 入场动画
+    // （组件本就随 activePage 卸载重建，此处不改变状态语义，只加视觉过渡）
+    return (
+      <div key={activePage} className="flex-1 flex flex-col overflow-hidden animate-page-in">
+        {(() => {
+          switch (activePage) {
+            case 'projects': return <ProjectsPage />
+            case 'experts': return <ExpertsPage />
+            case 'automation': return <AutomationPage />
+            case 'resources': return <ResourcesPage />
+            case 'more': return <MorePage />
+            case 'agents': return <AgentsPage />
+            case 'aiTools': return <AIToolsPage />
+            case 'tokenUsage': return <TokenUsagePage />
+            default: return <ChatArea />
+          }
+        })()}
+      </div>
+    )
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden relative app-root-bg">
+      <WallpaperLayer />
       <TitleBar />
       {loadError && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs flex-shrink-0">
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs flex-shrink-0 relative">
           <AlertTriangle size={14} className="flex-shrink-0" />
           <span className="flex-1 truncate">
             本地数据加载失败，当前为默认配置；此状态下保存设置可能覆盖你的配置（{loadError}）
@@ -1417,18 +1669,27 @@ function App() {
           </button>
         </div>
       )}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         <Sidebar
           collapsed={config.sidebarCollapsed || compactMode}
           onToggle={toggleSidebarUnified}
-          onSettings={() => useAppStore.getState().setShowSettings(true)}
+          onSettings={() => window.electronAPI?.app.openSettings?.()}
         />
         {renderPage()}
       </div>
-      {showSettings && (
-        <SettingsPanel
-          onClose={() => useAppStore.getState().setShowSettings(false)}
-        />
+
+      {/* 主页面左下角：检测到新版本时显示更新按钮 */}
+      {appUpdate.hasUpdate && (
+        <button
+          onClick={async () => {
+            const r = await window.electronAPI?.app.launchUpdater()
+            if (!r?.ok) window.alert('启动更新器失败：' + (r?.error || '请到设置中检查更新'))
+          }}
+          className="fixed bottom-5 left-5 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full bg-primary-600 text-white text-sm font-medium shadow-lg hover:bg-primary-700 transition-colors"
+        >
+          <Download size={16} />
+          发现新版本 v{appUpdate.latest}，点击更新
+        </button>
       )}
     </div>
   )

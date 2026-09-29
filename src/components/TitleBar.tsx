@@ -28,7 +28,7 @@ const TitleBar: React.FC = () => {
   const handleClose = () => window.electronAPI?.window.close()
 
   return (
-    <div className="titlebar flex items-center justify-between bg-white border-b border-gray-200 h-8 px-2 select-none">
+    <div className="titlebar flex items-center justify-between bg-white border-b border-gray-200 h-8 px-2 select-none app-titlebar-root relative">
       <div className="flex items-center gap-2 pl-2">
         <AppLogo size={20} />
         <span className="text-sm font-medium text-gray-700">deepwork</span>

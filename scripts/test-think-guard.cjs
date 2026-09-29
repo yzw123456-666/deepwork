@@ -31,41 +31,33 @@ function extractConst(name) {
   return extract(name)
 }
 
-// 轮 J：replaceCodeBlocksWithEdit 委托共享模块 codeFold 的 sanitizeThinkingDisplay，
-// 这里把 codeFold 的四个纯函数一并提取注入（CODE_NOTE / escapeRegExp 复用 ChatArea 版本，避免重复声明）
-const cfSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'codeFold.ts'), 'utf8')
-function grabCf(name) {
-  const i = cfSrc.indexOf('function ' + name + '(')
-  if (i === -1) throw new Error('codeFold 找不到函数 ' + name)
-  const e = cfSrc.indexOf('\n}', i)
-  return cfSrc.slice(i, e + 2)
-}
-const codeFoldFns = [
-  grabCf('foldFenceBlocks'),
-  grabCf('isCodeLine'),
-  grabCf('foldBareCode'),
-  grabCf('sanitizeThinkingDisplay'),
-].join('\n')
+// 轮 J+（2026-09-24）：思考区显示层单元化——codeFold 整文件转译加载，
+// parseThinkingUnits 把思考解析成 text/code 单元（code 单元 = 可展开的代码草稿）
+const ts = require('typescript')
+const cfJs = ts.transpileModule(
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'codeFold.ts'), 'utf8'),
+  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }
+).outputText
+const cfPath = path.join(__dirname, '..', '.temp-codefold.cjs')
+fs.writeFileSync(cfPath, cfJs)
+const cf = require(cfPath)
 
 const code = [
   src.match(/const CODE_NOTE = .+/)?.[0] || "const CODE_NOTE = '📄 代码草稿（未写入文件）'",
   extractConst('escapeRegExp'),
   extract('dropCodeBlocks'),
-  extract('replaceCodeBlocksWithEdit'),
   extract('stripCapabilityDenial'),
   extract('polishAssistantText'),
   extract('polishMessageContent'),
-  codeFoldFns,
 ].join('\n')
 
 // 源码是 TypeScript（含类型注解），先转译成 JS 再进 vm 执行
-const ts = require('typescript')
 const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
 
 const ctx = {}
 vm.createContext(ctx)
-vm.runInContext(js + '\nthis.api = { polishMessageContent, replaceCodeBlocksWithEdit, dropCodeBlocks }', ctx)
-const { polishMessageContent, replaceCodeBlocksWithEdit } = ctx.api
+vm.runInContext(js + '\nthis.api = { polishMessageContent, dropCodeBlocks }', ctx)
+const { polishMessageContent } = ctx.api
 
 let pass = 0, fail = 0
 function t(name, cond) {
@@ -120,24 +112,32 @@ const kept = (r8.match(/var v\d+/g) || []).length
 t('5 万字思考区 22 个代码块全部保留（实测 ' + kept + '/22）', kept === 22)
 t('正文代码规则仍生效', !r8.includes('已创建 go.html') === false)
 
-// 9. 思考区显示层清洗（2026-09-22 用户要求：思考区代码墙也用「📄 代码草稿（未写入文件）」取代）
-// 落盘保留原文（上面 1/3/6/8 已验证），但 ThinkingBlock **显示**时必须替换
-console.log('== 思考区显示层清洗（replaceCodeBlocksWithEdit） ==')
-const thinkDraft = '我先写个草稿：\n```html\n<html><body>hi</body></html>\n```\n再考虑性能。'
-const disp = replaceCodeBlocksWithEdit(thinkDraft)
-t('围栏代码块被替换为「📄 代码草稿（未写入文件）」', disp.includes('📄 代码草稿（未写入文件）') && !disp.includes('<body>hi'), disp.slice(0, 120))
-t('思考文字保留', disp.includes('我先写个草稿') && disp.includes('再考虑性能'))
-const dispOpen = replaceCodeBlocksWithEdit('起草中 ```js\nvar a = 1')
-t('未闭合代码块（流式中）也被替换', !dispOpen.includes('var a = 1') && dispOpen.includes('📄 代码草稿（未写入文件）'), dispOpen.slice(0, 120))
-const dispBare = replaceCodeBlocksWithEdit('草稿：<!DOCTYPE html><html><body>x</body></html>')
-t('裸 HTML 文档也被替换', !dispBare.includes('<body>') && dispBare.includes('📄 代码草稿（未写入文件）'))
-const dispInline = replaceCodeBlocksWithEdit('用 `useMemo` 记忆组件，注意依赖数组。')
-t('行内 code 不误伤', dispInline === '用 `useMemo` 记忆组件，注意依赖数组。')
-const dispMulti = replaceCodeBlocksWithEdit('```js\na\n```\n中间文字\n```py\nb\n```')
-t('多个代码块替换后去重为一行', (dispMulti.match(/📄 代码草稿（未写入文件）/g) || []).length === 2 || !/\n📄 代码草稿（未写入文件）\s*\n📄 代码草稿（未写入文件）/.test(dispMulti), dispMulti.slice(0, 120))
+// 9. 思考区显示层：代码草稿单元化（2026-09-24 用户要求「代码草稿也可以展开看看草稿内容是什么」）
+// 落盘保留原文（上面 1/3/6/8 已验证）；显示层 parseThinkingUnits 解析成 text/code 单元，
+// code 单元渲染为可展开的 CodeDraftBlock——默认仍是一行占位，点击展开看草稿原文，内容不再丢弃。
+console.log('== 思考区显示层单元化（parseThinkingUnits） ==')
+const uFence = cf.parseThinkingUnits('我先写个草稿：\n```html\n<html><body>hi</body></html>\n```\n再考虑性能。')
+t('围栏块解析为 code 单元（含草稿原文）', uFence.some(u => u.kind === 'code' && u.code.includes('<body>hi')))
+t('思考文字保留为 text 单元', uFence.some(u => u.kind === 'text' && u.text.includes('我先写个草稿')) && uFence.some(u => u.kind === 'text' && u.text.includes('再考虑性能')))
+const uOpen = cf.parseThinkingUnits('起草中 ```js\nvar a = 1')
+t('未闭合块（流式中）也是 code 单元', uOpen.some(u => u.kind === 'code' && u.code.includes('var a = 1')))
+const uHtml = cf.parseThinkingUnits('草稿：<!DOCTYPE html><html><body>x</body></html>')
+t('裸 HTML 文档 → code 单元', uHtml.some(u => u.kind === 'code' && u.code.includes('<!DOCTYPE html>')))
+const uInline = cf.parseThinkingUnits('用 `useMemo` 记忆组件，注意依赖数组。')
+t('行内 code 不误伤（纯 text 单元）', uInline.length === 1 && uInline[0].kind === 'text' && uInline[0].text.includes('`useMemo`'))
+const uBare = cf.parseThinkingUnits('分析：\nconst CSS_SIZE = 640;\nconst board = [];\nconst n = 19;\n按这个写。')
+t('无围栏裸代码 ≥3 行 → code 单元', uBare.some(u => u.kind === 'code' && u.code.includes('CSS_SIZE')))
+t('裸代码前后正文保留为 text 单元', uBare.some(u => u.kind === 'text' && u.text.includes('分析：')) && uBare.some(u => u.kind === 'text' && u.text.includes('按这个写')))
+const uTwo = cf.parseThinkingUnits('```js\na\n```\n中间文字\n```py\nb\n```')
+t('多个代码块各自成独立单元', uTwo.filter(u => u.kind === 'code').length === 2 && uTwo.some(u => u.kind === 'text' && u.text.includes('中间文字')))
+// 边界一致性：把 code 单元替换回占位行拼回去，应与字符串折叠 sanitizeThinkingDisplay 结果一致
+const sample = '计划如下：\n```js\nlet SIZE = 19;\n```\n然后开始写。'
+const joined = cf.parseThinkingUnits(sample).map(u => u.kind === 'text' ? u.text : '📄 代码草稿（未写入文件）').join('')
+t('单元拼回与 sanitizeThinkingDisplay 折叠边界一致', joined === cf.sanitizeThinkingDisplay(sample), JSON.stringify(joined))
 
-// 10. ThinkingBlock 组件静态断言：显示必须经过 replaceCodeBlocksWithEdit
-t('ThinkingBlock 渲染时调用 replaceCodeBlocksWithEdit', /replaceCodeBlocksWithEdit\(content\)/.test(src))
+// 10. ThinkingBlock 组件静态断言：渲染走单元化 + 代码草稿可展开（默认折叠）
+t('ThinkingBlock 渲染走 parseThinkingUnits', /parseThinkingUnits\(content\)/.test(src))
+t('CodeDraftBlock 组件存在且默认折叠（useState(false)）', /const CodeDraftBlock[\s\S]{0,600}?useState\(false\)/.test(src))
 t('flush 显示走 polishMessageContent（流式中正文也清洗）', /updateMessage\(conversation\.id, assistantMessage\.id, polishMessageContent\(fullContent\)\)/.test(src))
 
 console.log('\n结果: ' + pass + ' 通过, ' + fail + ' 失败')

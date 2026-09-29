@@ -89,7 +89,7 @@ export async function autoSummarizeMemory(
 要求：summary 用中文；keywords 要能覆盖用户以后可能的问法；files 只写文件名或相对路径，最多 6 个。`
 
   try {
-    const raw = await callModel(model, [{ role: 'user', content: prompt }], 0.2, signal)
+    const { content: raw } = await callModel(model, [{ role: 'user', content: prompt }], 0.2, signal)
     const data = extractJsonObject(raw)
     if (!data || typeof data.summary !== 'string' || !data.summary.trim()) return null
     const summary = data.summary.trim().slice(0, 300)

@@ -308,19 +308,49 @@ Module._load = function (request) {
     ok('多段思考保留空行分隔', cf.sanitizeThinkingDisplay(multi) === multi)
   }
 
+  console.log('\n===== 9b. codeFold：parseThinkingUnits（代码草稿可展开单元，2026-09-24） =====')
+  {
+    // codeFold.ts 是纯 TS 无依赖，直接转译加载
+    const src = fs.readFileSync(path.join(root, 'src', 'services', 'codeFold.ts'), 'utf8')
+    const js2 = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
+    const cfPath = path.join(root, '.temp-codefold.cjs')
+    fs.writeFileSync(cfPath, js2)
+    const cf = require(cfPath)
+    ok('导出 parseThinkingUnits', typeof cf.parseThinkingUnits === 'function')
+
+    const pu1 = cf.parseThinkingUnits('计划如下：\n```js\nlet SIZE = 19;\nlet board = [];\n```\n然后开始写。')
+    ok('围栏块解析为 code 单元（含原文，内容不丢）', pu1.some(u => u.kind === 'code' && u.code.includes('let SIZE = 19;')))
+    ok('围栏块前后思考文字为 text 单元', pu1.some(u => u.kind === 'text' && u.text.includes('计划如下：')) && pu1.some(u => u.kind === 'text' && u.text.includes('然后开始写。')))
+
+    const pu2 = cf.parseThinkingUnits('写代码：\n```js\nconst a = 1;')
+    ok('未闭合围栏（流式中）也是 code 单元', pu2.some(u => u.kind === 'code' && u.code.includes('const a = 1;')))
+
+    const pu3 = cf.parseThinkingUnits('分析布局：\nconst CSS_SIZE = 640; // 逻辑边长\n\nfunction cellSize() { return CSS_SIZE / (SIZE + 1); }\nfunction idxToXY(i, j) {\n  return [cellSize() * (i + 1), cellSize() * (j + 1)];\n}\n\n按这个写。')
+    ok('无围栏裸代码 ≥3 行解析为 code 单元', pu3.some(u => u.kind === 'code' && u.code.includes('const CSS_SIZE = 640;')), JSON.stringify(pu3.map(u => u.kind)))
+    ok('裸代码前后正文为 text 单元', pu3.some(u => u.kind === 'text' && u.text.includes('分析布局：')) && pu3.some(u => u.kind === 'text' && u.text.includes('按这个写。')))
+
+    const pu4 = cf.parseThinkingUnits('这里 let SIZE = 19 是棋盘边长；另外 return 语句在函数末尾。所以逻辑是对的。')
+    ok('单行代码提及不产生 code 单元', pu4.length === 1 && pu4[0].kind === 'text')
+
+    // 边界一致性：code 单元替换回占位行拼回去 ≙ sanitizeThinkingDisplay 的折叠结果
+    const sample = '计划如下：\n```js\nlet SIZE = 19;\n```\n然后开始写。'
+    const joined = cf.parseThinkingUnits(sample).map(u => u.kind === 'text' ? u.text : '📄 代码草稿（未写入文件）').join('')
+    ok('单元拼回与 sanitizeThinkingDisplay 折叠边界一致', joined === cf.sanitizeThinkingDisplay(sample), JSON.stringify(joined))
+  }
+
   console.log('\n===== 10. 完成式文案「动作：（路径）」格式 =====')
   {
     const chat = fs.readFileSync(path.join(root, 'src', 'components', 'ChatArea.tsx'), 'utf8')
     ok('edit_file → 编辑 路径（2026-09-23 视频格式，无冒号）', /case\s*'edit_file':\s*return\s*`编辑 \$\{p\}`/.test(chat))
     ok('write_file → 写入 路径（视频格式）', /case\s*'write_file':\s*return\s*`写入 \$\{p\}`/.test(chat))
-    ok('search_files → 已搜索 路径 关键词', /case\s*'search_files':\s*return\s*`已搜索 \$\{p\} \$\{String\(args\?\.pattern/.test(chat))
+    ok('search_files → 搜索 路径 关键词', /case\s*'search_files':\s*return\s*`搜索 \$\{p\} \$\{String\(args\?\.pattern/.test(chat))
     ok('run_command → 运行命令', /case\s*'run_command':\s*return\s*`运行命令`/.test(chat))
-    ok('完成态线性图标（12:11 视频样式：绿勾/红叉/灰 spinner，无彩色 emoji）', /CheckCircle2/.test(chat) && /XCircle/.test(chat) && !/function\s+inferToolEmoji\(/.test(chat))
+    ok('完成态线性图标（绿勾 CheckCircle2 / 红叉 XCircle / 灰 spinner，无彩色 emoji）', /CheckCircle2/.test(chat) && /XCircle/.test(chat) && /text-green-600/.test(chat) && !/function\s+inferToolEmoji\(/.test(chat))
     ok('工具行单行截断（truncate，超宽悬停看全文）', /text-\[13px\] truncate/.test(chat) && !/leading-5 break-all \$\{state/.test(chat))
     ok('元信息行「已处理」（12:11 视频，替代「已完成」）', /已处理/.test(chat) && !/text-xs">已完成</.test(chat))
     ok('完成式不再截短文件名（用完整路径）', !/已修改文件 \$\{short\}/.test(chat))
     // 独立任务界面已删除（轮 K）：原 TaskWorkspace 断言改为 ChatArea（任务 UI 已同步到对话页）
-    ok('ChatArea 思考区接入 sanitizeThinkingDisplay', chat.includes('sanitizeThinkingDisplay'))
+    ok('ChatArea 思考区接入 parseThinkingUnits（代码草稿可展开，2026-09-24）', chat.includes('parseThinkingUnits'))
     ok('ChatArea 思考区分段渲染（多次思考）', /segments\.map/.test(chat))
     ok('ChatArea onStatus 封段（工具动作打断思考流）', chat.includes('fullThinkingRef.current += ') && chat.includes('\\n\\n'))
     ok('ChatArea 任务会话用任务工作目录', chat.includes('currentConversation?.taskId'))
@@ -343,12 +373,26 @@ Module._load = function (request) {
     ok('引擎「只读不写」防线存在（反复读同一文件未写 → 催促动手）', eng.includes('rereadPromptCount') && eng.includes('你已经读取'))
     ok('提示词要求「同一个文件读一次就够了」', eng.includes('同一个文件读一次就够了'))
     // 2026-09-23 用户要求「出现写入就是真的开始写」：思考区代码草稿不再误判 + 未写文件拒绝结束
-    ok('思考区代码草稿不计入未保存违规（防纠正上限用尽后任务被静默终止）', eng.includes('stripThinkForCheck') && /hasUnsavedCodeBlock[\s\S]{0,220}stripThinkForCheck/.test(eng))
+    ok('思考区草稿豁免 + 完整文件藏思考区判违规（防逃避落盘静默终止）',
+      /function hasUnsavedCodeBlock/.test(eng) &&
+      eng.includes('inThink') &&
+      /(?:b\.length > 400|codeLines >= 10)/.test(eng) &&
+      /<think>/.test(eng))
     ok('写入意图兜底（任务要求写文件但整轮未写 → 拒绝结束逼它动手）', eng.includes('isWriteIntentTask') && eng.includes('writeIntentCount') && eng.includes('内容停留在思考或回复里等于零'))
     // 「智商」优化（2026-09-23）：同文件重复读取的结果不再全文重塞上下文
     ok('重复读取去重（同内容省略，省上下文防迷失）', eng.includes('lastReadOutput') && eng.includes('内容与上一次读取完全相同'))
     // 写入/编辑行 UI 规格（视频 f1992：✏️ 图标 + 路径绿色高亮）
     ok('写入/编辑行 ✏️ 图标 + 绿色路径（视频规格）', /✏️<\/span>/.test(chat) && /editMatch\[2\]/.test(chat))
+  }
+
+  // 2026-09-24 用户反馈「300 秒内没有收到任何数据」：长工具/思考期间 ChatArea 无数据超时误触发
+  {
+    const chat = fs.readFileSync(path.join(root, 'src', 'components', 'ChatArea.tsx'), 'utf8')
+    ok('工具执行状态 ref 存在', /const toolInProgressRef = useRef\(false\)/.test(chat))
+    ok('onToolUse 工具完成后恢复 stall 检测', /onToolUse = async \([^)]*\) => \{[\s\S]{0,220}?toolInProgressRef\.current = false\s*\n\s*armStallTimer\(controller, stallSeconds\)/.test(chat))
+    ok('onStatus 工具调用开始时暂停 stall 检测', /onStatus = async \([^)]*\) => \{[\s\S]{0,120}?if \(toolCall\) \{[\s\S]{0,220}?toolInProgressRef\.current = true\s*\n\s*if \(stallTimerRef\.current\) \{ clearTimeout\(stallTimerRef\.current\); stallTimerRef\.current = null \}/.test(chat))
+    ok('onThinking 思考输出时重置 stall 检测', /onThinking: \(delta\) => \{[\s\S]{0,120}?if \(!toolInProgressRef\.current\) armStallTimer\(controller, stallSeconds\)/.test(chat))
+    ok('finally 兜底重置 toolInProgressRef', /stallReasonRef\.current = ''\s*\n\s*toolInProgressRef\.current = false/.test(chat))
   }
 
   // 清理

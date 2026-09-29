@@ -1,42 +1,41 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   X,
   FolderOpen,
   ChevronDown,
-  Plus,
-  ArrowUp,
+  Puzzle,
   Loader2,
+  FolderPlus,
 } from 'lucide-react'
 import { useAppStore } from '../stores'
 import { Task, Conversation } from '../types'
+import { AgentListItem } from '../types/electron'
 import { v4 as uuidv4 } from 'uuid'
 
 interface CreateTaskDialogProps {
   onClose: () => void
 }
 
-// 按当前时间生成问候语
-function getGreeting(): string {
-  const h = new Date().getHours()
-  if (h >= 5 && h < 11) return '早上好'
-  if (h >= 11 && h < 13) return '中午好'
-  if (h >= 13 && h < 18) return '下午好'
-  return '晚上好'
-}
-
-// 新建任务欢迎页：只负责选择工作空间 + 命名 + 任务描述
-// 模型与运行权限在任务工作区（会话输入栏）中选择
+// 新建任务：表单式创建（名称 / 工作空间 / 可选 Agent 包 / 可选描述）
+// 不再有对话式「描述后发送」：创建后不自动发送任何消息，用户进入任务对话后自行开始
 const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
-  const { addTask, setCurrentTask, setActivePage, setPendingTaskMessage, models, currentModel, config, addConversation, setCurrentConversation } = useAppStore()
+  const { addTask, setCurrentTask, setActivePage, models, currentModel, config, addConversation, setCurrentConversation } = useAppStore()
 
   const [taskName, setTaskName] = useState('')
-  const [input, setInput] = useState('')
+  const [description, setDescription] = useState('')
   const [folderPath, setFolderPath] = useState('')
+  const [agentId, setAgentId] = useState('')            // 空 = 不使用 Agent
+  const [agents, setAgents] = useState<AgentListItem[]>([])
   const [creating, setCreating] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // 已安装 Agent 包列表（供下拉选择；离线时合并 localOnly，未安装任何 Agent 时显示引导文案）
   useEffect(() => {
-    textareaRef.current?.focus()
+    window.electronAPI?.agents?.list?.().then(r => {
+      if (r?.ok) {
+        const all = [...(r.agents || []), ...(r.localOnly || [])]
+        setAgents(all.filter(p => p.installed))
+      }
+    }).catch(() => {})
   }, [])
 
   const handleSelectFolder = async () => {
@@ -48,20 +47,18 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
     ? folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folderPath
     : ''
 
-  const canSend = !!input.trim() && !!folderPath && !creating
+  const canCreate = !!folderPath && !creating
 
-  const handleSend = async () => {
-    const text = input.trim()
-    if (!text || !folderPath || creating) return
+  const handleCreate = async () => {
+    if (!folderPath || creating) return
     setCreating(true)
 
-    // 任务名：手动命名为空时自动取描述首行前 24 字
-    const firstLine = text.split('\n')[0].trim()
     // 默认带上一个可用模型：否则任务设置里会显示「未选模型」，执行时才临时抓一个
     const defaultModelId = currentModel?.id || models.find(m => m.enabled)?.id
+    const name = taskName.trim().slice(0, 30) || '新任务'
     const newTask: Task = {
       id: uuidv4(),
-      name: taskName.trim().slice(0, 30) || firstLine.slice(0, 24) || '新任务',
+      name,
       folderPath,
       mainModels: defaultModelId ? [defaultModelId] : [],
       status: 'pending',
@@ -69,13 +66,16 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
       updatedAt: Date.now(),
       messages: [],
       subtasks: [],
-      // 命令执行权限：取对话输入框「默认权限」下拉设置的默认值
+      // 命令执行权限：取「默认权限」设置的默认值
       execPermission: config.taskDefaultPermission ?? 'default',
+      // 新建时选用的 Agent 包（可选）：对话时注入其专属人格与技能
+      ...(agentId ? { agentId } : {}),
+      ...(description.trim() ? { description: description.trim().slice(0, 500) } : {}),
     }
 
     try {
       await addTask(newTask)
-      // 任务必须挂一个对话：自动在任务下创建一个空对话，供用户在任务下直接交流
+      // 任务挂一个空对话：任务的一切交流都在任务下的对话里进行（这里不预填任何消息）
       const now = Date.now()
       const firstConv: Conversation = {
         id: uuidv4(),
@@ -88,8 +88,6 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
       addConversation(firstConv)
       setCurrentConversation(firstConv)
       setCurrentTask(newTask)
-      setPendingTaskMessage(text)
-      // 任务不再有独立界面：直接进入对话页，首条描述由 ChatArea 消费 pendingTaskMessage 自动发送
       setActivePage('chat')
       onClose()
     } catch (e) {
@@ -101,7 +99,7 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] bg-gray-50 flex flex-col animate-fade-in">
+    <div className="fixed inset-0 z-[60] bg-gray-50 flex flex-col animate-page-in">
       {/* 关闭按钮 */}
       <button
         onClick={onClose}
@@ -111,82 +109,94 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({ onClose }) => {
         <X size={20} />
       </button>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-24">
-        {/* 问候语 */}
-        <h1 className="text-3xl font-bold text-gray-800 mb-10 text-center">
-          {getGreeting()}，有什么想让我帮忙的吗
-        </h1>
+      <div className="flex-1 flex items-center justify-center px-6 pb-16">
+        <div className="w-full max-w-xl">
+          <h1 className="text-2xl font-bold text-gray-800 mb-1 text-center">新建任务</h1>
+          <p className="text-sm text-gray-500 mb-8 text-center">选择工作空间，创建后即可在任务对话中开始工作</p>
 
-        {/* 输入卡片 */}
-        <div className="w-full max-w-2xl bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-          {/* 任务命名 */}
-          <input
-            value={taskName}
-            onChange={(e) => setTaskName(e.target.value)}
-            placeholder="任务名称（可留空，自动取自描述）"
-            maxLength={30}
-            className="w-full bg-transparent border-0 focus:ring-0 text-gray-800 placeholder-gray-400 text-sm font-medium px-4 pt-3.5 outline-none"
-          />
+          <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-5 space-y-5">
+            {/* 任务名称 */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">任务名称 <span className="text-gray-400">（可留空，默认「新任务」）</span></label>
+              <input
+                value={taskName}
+                onChange={(e) => setTaskName(e.target.value)}
+                placeholder="例如：整理项目文档"
+                maxLength={30}
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-transparent"
+              />
+            </div>
 
-          {/* 工作空间选择 */}
-          <div className="px-4 pt-2.5">
+            {/* 工作空间 */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">工作空间 <span className="text-red-400">*</span></label>
+              <button
+                onClick={handleSelectFolder}
+                className="w-full flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
+                title="选择工作文件夹"
+              >
+                <FolderOpen size={15} className="text-gray-400 flex-shrink-0" />
+                <span className={`flex-1 truncate ${folderName ? 'text-gray-800' : 'text-gray-400'}`}>
+                  {folderName || '选择一个文件夹作为本任务的工作空间'}
+                </span>
+                <ChevronDown size={14} className="text-gray-400 flex-shrink-0" />
+              </button>
+            </div>
+
+            {/* Agent 包（可选） */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">
+                Agent <span className="text-gray-400">（可选：为任务启用专属人格与技能）</span>
+              </label>
+              {agents.length > 0 ? (
+                <div className="relative">
+                  <select
+                    value={agentId}
+                    onChange={(e) => setAgentId(e.target.value)}
+                    className="w-full appearance-none bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 pl-9 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-transparent cursor-pointer"
+                  >
+                    <option value="">不使用 Agent</option>
+                    {agents.map(p => (
+                      <option key={p.id} value={p.id}>{p.icon} {p.name} · {p.description.slice(0, 24)}…</option>
+                    ))}
+                  </select>
+                  <Puzzle size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
+              ) : (
+                <div className="text-xs text-gray-400 bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2.5">
+                  还没有已安装的 Agent — 到「更多 → Agent」安装后即可在这里选用
+                </div>
+              )}
+            </div>
+
+            {/* 任务描述（可选备注，不自动发送） */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">任务描述 <span className="text-gray-400">（可选备注，创建后不自动发送）</span></label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="记录这个任务的背景、目标或注意事项…"
+                className="w-full resize-none bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-transparent min-h-[64px]"
+                rows={2}
+              />
+            </div>
+
+            {/* 创建按钮 */}
             <button
-              onClick={handleSelectFolder}
-              className="flex items-center gap-2 px-2.5 py-1.5 -ml-2.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition-colors max-w-full"
-              title="选择工作空间"
-            >
-              <FolderOpen size={16} className="text-gray-500 flex-shrink-0" />
-              <span className="truncate">{folderName || '选择工作空间'}</span>
-              <ChevronDown size={15} className="text-gray-500 flex-shrink-0" />
-            </button>
-          </div>
-
-          {/* 任务描述 */}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            placeholder="今天帮你做些什么？描述任务后发送，AI 将自主完成工作"
-            className="w-full resize-none bg-transparent border-0 focus:ring-0 text-gray-700 placeholder-gray-400 text-sm px-4 pt-2 min-h-[80px]"
-            rows={3}
-          />
-
-          {/* 底部控制栏 */}
-          <div className="flex items-center justify-between px-3 pb-3 pt-1">
-            <button
-              onClick={handleSelectFolder}
-              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
-              title="选择工作空间"
-            >
-              <Plus size={18} />
-            </button>
-
-            {/* 发送按钮 */}
-            <button
-              onClick={handleSend}
-              disabled={!canSend}
-              className="p-2.5 bg-gray-900 text-white rounded-full hover:bg-gray-700 disabled:opacity-60 disabled:cursor-not-allowed active:scale-95 transition-all"
-              title="创建并开始任务"
+              onClick={handleCreate}
+              disabled={!canCreate}
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-gray-900 text-white rounded-xl hover:bg-gray-700 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition-all text-sm font-medium"
             >
               {creating ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
-                <ArrowUp size={16} />
+                <FolderPlus size={16} />
               )}
+              创建任务
             </button>
           </div>
         </div>
-
-        {/* 提示 */}
-        <p className="mt-4 text-xs text-gray-500">
-          Enter 发送，Shift + Enter 换行 · 模型与运行权限可在任务工作区下方选择
-        </p>
       </div>
     </div>
   )

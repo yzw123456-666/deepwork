@@ -19,6 +19,17 @@ extraResources:
   - from: resources/icon.png
     to: icon.png
 
+# 独立更新器 / 卸载器（Python→PyInstaller 产物），随 app 一起分发，放在 app 根目录
+# 由 tools/updater/build.py 生成（需先 pyinstaller 打包）
+extraFiles:
+  - from: tools/updater/dist/update.exe
+    to: update.exe
+  - from: tools/updater/dist/uninstall.exe
+    to: uninstall.exe
+  - from: tools/updater/sources.json
+    to: sources.json
+
+
 win:
   target:
     - target: nsis

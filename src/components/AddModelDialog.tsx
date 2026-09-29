@@ -89,7 +89,7 @@ const AddModelDialog: React.FC<AddModelDialogProps> = ({ model, onSave, onClose 
   const inputCls = 'w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition-all'
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] animate-fade-in">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] animate-pop-in">
       <div className="bg-white rounded-2xl shadow-2xl w-[560px] max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-3">

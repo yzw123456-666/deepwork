@@ -727,3 +727,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
     )
   },
 }))
+
+// 跨窗口配置同步（2026-09-26 修复）：设置是独立窗口，改配置只更新「本窗口」store 并落盘，
+// 主进程会把 config:changed('appConfig', cfg) 广播给「其他」窗口；此前渲染进程没监听，
+// 导致主窗口要重启才生效（壁纸/主题/人格等所有跨窗口配置）。这里注册一次，收到即合并进本地 store。
+// 主进程已排除发送者自身，故不会回环；发送者本地 setConfig 已即时更新，这里只同步接收方。
+if (typeof window !== 'undefined') {
+  const ea: any = (window as any).electronAPI
+  // 注意：preload 暴露的是 config.onChange（不是 onChanged）
+  if (ea?.config?.onChange) {
+    ea.config.onChange((key: string, value: any) => {
+      if (key === 'appConfig' && value && typeof value === 'object') {
+        const cur = (useAppStore.getState().config as any) || {}
+        useAppStore.setState({ config: { ...cur, ...value } })
+      }
+    })
+  }
+}

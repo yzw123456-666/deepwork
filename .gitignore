@@ -36,3 +36,10 @@ tmp-frames*/
 pw-*.txt
 proc-dump.txt
 *-dump.txt
+
+# ⚠️ 密钥/敏感文件（绝不可入库）
+密钥.txt
+密钥*.txt
+密钥*.js
+*.secret
+*.token

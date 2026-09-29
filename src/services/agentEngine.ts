@@ -96,6 +96,9 @@ const AGENT_IDENTITY = [
   '- 永远不要说「我没有文件写入权限」「我无法访问你的电脑」「我只能在对话中回答」——这些说法都是错的。',
   '- 永远不要为「其实没有真的创建文件」而道歉——你调用 Write 之后文件就已经存在了。',
   '- 如果工具返回失败，如实报告那条错误信息并换个方法重试；不要退化成「我做不到」的解释。',
+  '',
+  '你不是聊天机器人。你是能在用户电脑上真实创建文件、运行命令、联网查资料的自主 Agent——',
+  '用户给你一个任务，你应当直接把它做完，而不是停在「好的，我来帮您」这类寒暄上。',
 ].join('\n')
 
 /** 输出协议：deepwork 特有的文本工具协议 */
@@ -111,6 +114,14 @@ const OUTPUT_PROTOCOL = [
   '任务完成时：',
   'DONE: <总结：做了什么、改了哪些文件、验证结果如何、用户还需要手动做什么>',
   '',
+  '## DONE 前自检（有任何一项不满足，就继续调用工具，禁止 DONE）',
+  '',
+  '输出 DONE 之前，逐项对照用户的原始请求自查：',
+  '- 请求里的每一项要求都完成了吗？漏掉任何一项都不能 DONE——只做了一半就收工是最严重的失败。',
+  '- 多步任务：todo 清单是否已全部 complete？存在未完成项 = 必须继续干活。',
+  '- 每个产物是否都通过工具真实写盘成功（工具返回成功，而不是「我打算写」）？',
+  '- 自查不通过时，你的回复就应该是下一个 TOOL 调用——DONE 只属于真正全部做完的时刻。',
+  '',
   '## 默认行为是调用工具',
   '',
   '除非任务已经完全结束，否则你的回复就应该是工具调用——而不是解释、不是方案、不是道歉。',
@@ -119,6 +130,7 @@ const OUTPUT_PROTOCOL = [
   '- 只有两种情况可以不调用工具：任务真的已经做完（输出 DONE），或需要用户做一个无法自行推断的',
   '  选择（用一句话问题 + A/B/C 选项）。',
   '- 禁止用「我无法…」「我没有权限…」「作为 AI 我…」开头。你有权限，直接做。',
+  '- 调用工具时，TOOL/ARGS 就是回复的全部内容——不要在上面加一大段解释或寒暄；把说明留到工具结果出来之后再说。',
 ].join('\n')
 
 /** 工作纪律：对齐 ZCode WORKFLOW_DISCIPLINE 的六条 */
@@ -130,8 +142,9 @@ const WORKFLOW_DISCIPLINE = [
   '   等待那些你自己就能推断出来的澄清。',
   '   **同一个文件读一次就够了**：读完立即动手改（write_file / edit_file），不要反复读取同一文件；',
   '   用户让你改文件时，"没有动手改" 等于任务失败。',
-  '2. 多步任务先规划。超过两三步的任务，先说明你打算怎么做，然后一步一步执行，每步检查结果',
-  '   再继续。',
+  '2. 多步任务先规划再逐步执行。超过两三步的任务，先 todo_write 列出全部步骤（一步不漏），然后',
+  '   逐项执行，每完成一项立即 complete 对应项。只有清单全部打勾、且每项产物都真实落盘成功，',
+  '   才允许 DONE——做到一半就宣布完成是最严重的失败模式，宁可多花几轮工具调用，也不能漏掉后半段。',
   '3. 改动最小且精准。用能解决问题的最小改动，并跟随周围代码的风格：命名、缩进、注释密度、',
   '   惯用法。不要顺手重排无关代码，不要加用户没要过的错误处理或功能，不要凭空引入未安装的依赖。',
   '4. 验证后再宣称成功。改完代码要用 run_command 跑相关测试、构建或命令来证明它能工作。',
@@ -186,6 +199,12 @@ const TOOL_TABLE = [
   '  登录的页面。ARGS: {"url": "http(s):// 开头的完整网址", "max_chars": "正文截断长度，默认 12000（可选）"}。',
   '- use_skill: 加载并遵循已安装技能包（SKILL.md）的工作流。任务与某个技能明显相关时，先加载它再动手。',
   '  ARGS: {"skill_name": "技能清单里的 slug", "description": "本次用它做什么（可选）", "max_chars": "正文截断长度，默认 20000（可选）"}。',
+  '',
+  '## 规划类（多步任务建议先用它理清进度）',
+  '- todo_write（别名 todo / TodoWrite）: 维护一个任务清单，让多步任务有可见进度，避免「做到一半就说完成」或漏做步骤。',
+  '  长任务开始前列出全部步骤（action:"add" 逐条加），每完成一步立刻 action:"complete" 勾掉，随时 action:"list" 回看进度。',
+  '  ARGS: {"action": "add | update | complete | list | clear", "content": "任务描述（add / update 时必填）", "index": "第几条，从 1 开始（update / complete 时必填）"}。',
+  '  清单按当前工作目录隔离，存在工作目录的 .deepwork/todos.json，跨会话保留。',
 ].join('\n')
 
 /** 工具指引：对齐 ZCode TOOL_GUIDANCE */
@@ -195,6 +214,7 @@ const TOOL_GUIDANCE = [
   '- 优先用专用工具，而不是 shell 一行流：查看用 Read / Glob / Grep，',
   '  而不是在 Bash 里跑 cat / find / grep——专用工具更快、更安全，也遵守工作区边界。',
   '- 多个互不依赖的 Read / Glob / Grep 可以放在同一轮里一起发出，不要一轮只发一个。',
+  '- 多步任务先用 todo_write 列出全部步骤，每完成一步立即 complete，避免漏做或提前 DONE。',
   '- 改动已有文件用 Edit；写新文件或完全重写才用 Write。Edit 的 old_string 必须',
   '  精确且唯一。Edit 之前必须先 Read 目标文件（强制执行）。',
   '- Bash 在非交互 shell 中执行：stdin 未连接，所以要用非交互参数，不要用编辑器或分页器；',
@@ -224,6 +244,25 @@ const COMMUNICATION_GUIDANCE = [
   '  （A. xxx B. xxx）。能推断就不要问。',
 ].join('\n')
 
+/** 禁止行为红线：把运行时「自动纠正」拦截的那些致命模式前置到提示词里，减少浪费的纠正轮次 */
+const FORBIDDEN_PATTERNS = [
+  '# 禁止行为红线',
+  '',
+  '以下任意一条都会立刻被系统纠正并浪费一轮推理。请在输出前自检，不要触碰：',
+  '',
+  '- ❌ 否认能力：永远不要说「我没有文件写入权限」「我无法访问你的电脑」「作为 AI 我做不到」',
+  '  「我只能在对话里回答」。这些都是错的——你的工具真的会执行。',
+  '- ❌ 只说不写：不要用大段代码「回答」任务。所有代码 / 网页 / 文档内容都必须通过 Write / Edit 写入文件，',
+  '  回复里只给结论，绝不贴完整代码。',
+  '- ❌ 读而不改：读文件是为了改文件。读完立即动手改（write_file / edit_file），同一个文件读一次就够了，',
+  '  不要反复读同一个文件。',
+  '- ❌ 空谈计划：不要用「我先看看现状…然后我打算…」这种纯叙述收尾。要行动就调用工具，要结束就输出 DONE。',
+  '- ❌ 过度反问：任务已经在前面的消息里给了，不要反问「您想让我做什么 / 请明确任务」。直接执行，或给 A/B/C 选项。',
+  '- ❌ 假完成：不要把写在思考里、没落盘的内容说成「已完成」。没用工具真正写盘 = 没做，必须先用工具写文件，再 DONE 总结。',
+  '- ❌ 半途而废：用户要 A、B、C 三件事，只做完 A（或 A+B）就 DONE。DONE 前必须逐项对照原始请求；',
+  '  用 todo 跟踪时，只要还有未 complete 的项就继续调用工具，绝不提前收工。',
+].join('\n')
+
 /** Windows 命令提示：deepwork 运行在 Windows，保留该平台事实 */
 const PLATFORM_NOTES = [
   '# 平台注意事项（Windows）',
@@ -245,6 +284,8 @@ const TOOLS_PROMPT = [
   TOOL_GUIDANCE,
   '',
   COMMUNICATION_GUIDANCE,
+  '',
+  FORBIDDEN_PATTERNS,
   '',
   PLATFORM_NOTES,
 ].join('\n')
@@ -292,7 +333,7 @@ export async function callModel(
   temperature: number = 0.7,
   signal?: AbortSignal,
   onThinking?: (text: string) => void
-): Promise<string> {
+): Promise<{ content: string; raw: string }> {
   // 直接使用模型自身配置的端点与密钥
   const baseUrl = model.baseUrl || 'https://api.openai.com/v1'
   const apiKey = model.apiKey || ''
@@ -333,6 +374,7 @@ export async function callModel(
     const json = await response.json()
     const msg = json.choices?.[0]?.message || {}
     let content: string = msg.content || ''
+    let rawContent = content
     const reasoning: string = msg.reasoning_content || ''
     if (reasoning.trim()) {
       try { onThinking?.(reasoning.trim()) } catch {}
@@ -347,13 +389,15 @@ export async function callModel(
       try { onThinking?.(openThink[1].trim()) } catch {}
       content = ''
     }
-    return content
+    // raw 保留含 <think> 标签的原始响应，供上层检测「藏在思考区逃避落盘」的违规行为
+    return { content, raw: rawContent }
   }
 
   // 流式解析：reasoning_content 增量实时回调，实现深度思考实时显示
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let content = ''
+  let rawContent = ''
   let thinkContent = ''
   let buffer = ''
 
@@ -382,6 +426,7 @@ export async function callModel(
         }
         if (contentDelta) {
           content += contentDelta
+          rawContent += contentDelta
         }
       } catch {
         // 忽略不完整 chunk
@@ -401,7 +446,8 @@ export async function callModel(
     content = ''
   }
 
-  return content
+  // raw 保留含 <think> 标签的完整原始响应，供上层检测「藏在思考区逃避落盘」的违规行为
+  return { content, raw: rawContent }
 }
 
 // ---------- 工具解析与执行 ----------
@@ -437,10 +483,37 @@ export function parseToolCall(text: string): ToolCall | null {
   }
 }
 
+/**
+ * todo 未完成检查（2026-09-25「未执行完就退出」治理的引擎层兜底）：
+ * DONE 前读 root/.deepwork/todos.json（走 agent:todo IPC 的 list 渲染输出），
+ * 存在未 complete 项时禁止宣布完成、注入纠正。任何异常返回 null（静默跳过，不阻塞主流程）。
+ */
+export async function todoHasIncomplete(root: string): Promise<{ count: number; preview: string } | null> {
+  try {
+    const api = (globalThis as any).window?.electronAPI
+    if (!api?.agent?.todo) return null
+    const r = await api.agent.todo(root, 'list')
+    if (!r?.ok || !r.output) return null
+    const out = String(r.output)
+    const stat = out.match(/共 (\d+)，已完成 (\d+)/)
+    if (stat) {
+      const total = Number(stat[1])
+      const done = Number(stat[2])
+      if (!(total > done)) return null
+    } else {
+      // 没有统计行就按未完成行判断
+      if (!/^\s*\d+\.\s*\[\s*\]/m.test(out)) return null
+    }
+    const pending = out.split('\n').filter((l: string) => /^\s*\d+\.\s*\[\s*\]/.test(l))
+    return { count: pending.length, preview: pending.slice(0, 5).map((l: string) => l.trim()).join('\n') }
+  } catch {
+    return null
+  }
+}
+
 // 容错识别完成宣告：支持 DONE: / DONE：/ **DONE:**，以及 DONE 前带有简短说明文本的情况。
 // 返回总结文本；未识别到 DONE 返回 null
-export function parseDoneResponse(text: string): string | null {
-  const head = text.match(/^\s*(?:\*\*)?\s*DONE\s*[:：]\s*(?:\*\*)?\s*([\s\S]*)$/i)
+export function parseDoneResponse(text: string): string | null {  const head = text.match(/^\s*(?:\*\*)?\s*DONE\s*[:：]\s*(?:\*\*)?\s*([\s\S]*)$/i)
   if (head) return head[1].trim()
   // DONE 在最后一行且前面只有简短说明（≤3 行）时也算完成
   const lines = text.trimEnd().split('\n')
@@ -503,6 +576,8 @@ export async function executeTool(
     ls: 'list_files',
     list: 'list_files',
     todo_write: 'todo',
+    todowrite: 'todo',
+    todo: 'todo',
   }
   const ARG_ALIAS: Record<string, string> = {
     file_path: 'path',
@@ -510,7 +585,6 @@ export async function executeTool(
     file: 'path',
     old_string: 'old_str',
     new_string: 'new_str',
-    pattern_: 'pattern',
     timeout: 'timeout_ms',
     cmd: 'command',
   }
@@ -686,8 +760,20 @@ export async function executeTool(
           output: `已加载技能「${hit.name}」${hit.version ? ` v${hit.version}` : ''}（${hit.slug}）。请严格按下面的技能说明执行当前任务：\n\n${r.content}${fileList}`
         }
       }
+      case 'todo': {
+        const action = String(args.action ?? 'list').toLowerCase()
+        const content = args.content ?? args.text
+        const index = args.index ?? args.idx
+        const payload: { content?: string; index?: number; status?: string } = {}
+        if (content !== undefined) payload.content = String(content)
+        if (index !== undefined) payload.index = Number(index)
+        if (args.status !== undefined) payload.status = String(args.status)
+        const r = await api.agent.todo(root, action, payload)
+        if (!r?.ok) return { ok: false, output: r?.error || '任务清单操作失败' }
+        return { ok: true, output: r.output || '(无内容)' }
+      }
       default:
-        return { ok: false, output: `未知工具: ${tool}。可用工具: list_files, find_files(Glob), read_file(Read), search_files(Grep), write_file(Write), edit_file(Edit), append_file, delete_file, move_file, copy_file, create_dir, run_command(Bash), web_search, web_fetch(WebFetch), use_skill` }
+        return { ok: false, output: `未知工具: ${tool}。可用工具: list_files, find_files(Glob), read_file(Read), search_files(Grep), write_file(Write), edit_file(Edit), append_file, delete_file, move_file, copy_file, create_dir, run_command(Bash), web_search, web_fetch(WebFetch), use_skill, todo_write(清单)` }
     }
   } catch (e: any) {
     return { ok: false, output: e.message }
@@ -878,7 +964,7 @@ async function compactContext(
 对话历史：
 ${parts.join('\n\n')}`
   try {
-    const summary = await callModel(model, [{ role: 'user', content: compactPrompt }], 0.2, signal)
+    const { content: summary } = await callModel(model, [{ role: 'user', content: compactPrompt }], 0.2, signal)
     return [{ role: 'system', content: system.content }, { role: 'user', content: `[历史摘要 - 由系统自动压缩生成]\n${summary}` }, ...recent]
   } catch {
     // 压缩失败则降级：截断保留每条开头
@@ -901,16 +987,40 @@ function isWriteIntentTask(taskDesc: string): boolean {
 // 检测回复中是否包含未保存的代码块。
 // 用户明确要求「对话里不要出现代码」，因此阈值压到 >120 字符（约 4~5 行）即算违规，
 // 而不是早期的大段代码（>200）。行内 `code` 与极短片段不受影响。
-// 2026-09-23 修复：**排除 <think> 思考区**——模型在思考里写代码草稿是正常推理过程，
-// 旧实现把它算作违规，导致正常思考被反复纠正、纠正上限用尽后任务被静默终止（文件从未创建）。
-function stripThinkForCheck(text: string): string {
-  return String(text || '').replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
-}
+//
+// 2026-09-23 修复：排除 <think> 思考区，避免正常推理草稿被误判而反复纠正、静默终止。
+// 2026-09-24 修复（v26.9.48）兜底该修复引入的「逃避漏洞」：
+//   弱模型会把完整代码塞进 <think> 思考区（或干脆不闭合标签），令可见 content 变空、
+//   从而绕过「未保存代码」纠正——结果模型不写文件就「完成」，用户看到「300 秒无数据」或空退出。
+//   因此对思考区区别对待——
+//   · 思考区内中等长度的代码片段（≤400 字符的围栏块、或少量代码行）仍豁免，保留正常推理；
+//   · 但「完整文件级」代码（>400 字符的围栏块，或可见正文极短却有 ≥10 行真实代码特征）视为违规，强制落盘。
 function hasUnsavedCodeBlock(text: string): boolean {
-  const visible = stripThinkForCheck(text)
-  const blocks = visible.match(/```[\s\S]*?```/g) || []
-  if (blocks.some(b => b.length > 120)) return true
-  if (/<!DOCTYPE|<html[\s>]/i.test(visible) && visible.length > 120) return true
+  const t = String(text || '')
+  // 按 <think> 边界切分段落，分别施加不同阈值（思考区宽松、可见正文严格）
+  const segments = t.split(/(<think>[\s\S]*?<\/think>|<think>[\s\S]*$)/gi).filter(s => s.length)
+  for (const seg of segments) {
+    const inThink = /^<think/i.test(seg.trim()) || seg.startsWith('<think>')
+    const blocks = seg.match(/```[\s\S]*?```/g) || []
+    if (inThink) {
+      // 思考区：仅「完整文件级」大块算违规（中等草稿豁免）
+      if (blocks.some(b => b.length > 400)) return true
+    } else {
+      // 可见正文：>120 字符的围栏块即违规
+      if (blocks.some(b => b.length > 120)) return true
+    }
+  }
+  // 裸 HTML 文档（无论是否在思考区）一律算违规
+  if (/<!DOCTYPE|<html[\s>]/i.test(t) && t.length > 120) return true
+  // 逃避检测：可见正文极短，但 <think> 内藏着成片真实代码（无围栏 / 碎片化）——视为逃避落盘
+  const visible = t.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/gi, '').trim()
+  if (visible.length < 30) {
+    const thinkBody = (t.match(/<think>([\s\S]*?)(?:<\/think>|$)/gi) || []).join('\n')
+    const codeLines = thinkBody.split('\n').filter(l =>
+      /^\s*(def |class |import |from \w+ import|print\(|return |if __name__|function |const |let |var |public |private |protected |<\?php|console\.log|<\/?[a-z][\s\S]{0,20}>)/.test(l)
+    ).length
+    if (codeLines >= 10) return true
+  }
   return false
 }
 
@@ -918,9 +1028,12 @@ function hasUnsavedCodeBlock(text: string): boolean {
  * 从最终回复中剥掉代码块，只保留结论性文字。
  * 用于「已达到纠正上限、模型仍坚持贴代码」的兜底：与其把一坨代码甩给用户，
  * 不如只保留说明文字（代码本身已经落在文件里了）。
+ * 2026-09-24 扩展：同时剥离 <think> 思考区，避免模型把代码藏进思考后兜底文案仍泄露代码。
  */
 function stripCodeBlocks(text: string): string {
   const stripped = text
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/g, '')
     .replace(/```[^\n]*\n[\s\S]*?```/g, '')
     // 裸 HTML 文档（不带围栏）也要删：必须是完整文档或从整行开头开始，
     // 避免误伤普通句子里的 <html> 提及
@@ -935,6 +1048,7 @@ function stripCodeBlocks(text: string): string {
 
 export interface AgentLoopOptions {
   thinkingDepth?: ThinkingDepth   // 思考深度（默认 high）
+  persona?: string                // 人格设置附加块（ChatArea 传入 buildPersonaBlock 结果；空/缺省不注入）
 }
 
 export async function runAgentLoop(
@@ -978,6 +1092,7 @@ export async function runAgentLoop(
 
   const systemContent = [
     contextPrefix,
+    ...(options?.persona ? [options.persona] : []),
     '',
     environmentBlock,
     contextFile,
@@ -997,6 +1112,7 @@ export async function runAgentLoop(
 
   let correctionCount = 0
   const MAX_CORRECTIONS = 3 // 最多纠正 3 次，避免无限循环
+  let todoCorrectionCount = 0 // todo 未完成却 DONE 的独立纠正计数（2026-09-25，最多 2 次防死锁）
   let lastCompactLen = 0 // 上次压缩后的消息数（防抖动）
   let emptyReplies = 0 // 连续空回复计数
   let lastFailedCall = '' // 上一次失败的调用签名（tool + args）
@@ -1042,10 +1158,12 @@ export async function runAgentLoop(
       try { callbacks.onModelContextUsage?.(model.id, compactedUsed, contextWindow) } catch {}
     }
 
-    const response = await callModel(model, messages, 0.4, signal, callbacks.onThinking)
+    const { content: response, raw: rawResponse } = await callModel(model, messages, 0.4, signal, callbacks.onThinking)
 
     // 空回复：要求重新输出；连续 3 次则放弃（交由上层切换备用模型）
-    if (!response.trim()) {
+    // 注意：若可见正文为空、但原始响应（rawResponse）里藏着 <think> 包裹的代码，
+    // 不能作为「空回复」处理——否则会绕过「未保存代码」纠正，模型不写文件就「完成」。
+    if (!response.trim() && !hasUnsavedCodeBlock(rawResponse)) {
       emptyReplies++
       if (emptyReplies >= 3) throw new Error('模型连续返回空回复')
       messages.push({ role: 'assistant', content: '(空回复)' })
@@ -1129,32 +1247,52 @@ export async function runAgentLoop(
     }
 
     // DONE → 完成校验：总结中不允许包含未保存的大段代码
+    // 检测基于 rawResponse（含 <think> 标签），防止模型把代码藏进思考区逃避检测
     const doneSummary = parseDoneResponse(response)
     if (doneSummary !== null) {
-      if (hasUnsavedCodeBlock(response) && correctionCount < MAX_CORRECTIONS) {
+      if (hasUnsavedCodeBlock(rawResponse) && correctionCount < MAX_CORRECTIONS) {
         correctionCount++
-        messages.push({ role: 'assistant', content: response })
+        messages.push({ role: 'assistant', content: rawResponse })
         messages.push({
           role: 'user',
           content: `⚠️ 纠正（第 ${correctionCount} 次）：你的 DONE 总结中包含大段代码，但这些代码还没有保存到文件。
+
+注意：把代码藏进 <think> 思考区、或不调用工具直接写出来，都等同于「没有完成任务」——代码必须真正写入文件才算数。
 
 请先调用 Write 工具把代码保存到相应文件：
 TOOL: write_file
 ARGS: {"file_path": "文件名", "content": "完整代码内容"}
 
-全部保存成功后，再输出 DONE: 简要总结（只说明做了什么、保存了哪些文件，不要粘贴完整代码）。`,
+全部保存成功后，再输出 DONE: 简要总结（只说明做了什么、保存了哪些文件，不要粘贴完整代码，也不要把代码藏在思考区）。`,
+        })
+        continue
+      }
+      // todo 未完成检查（2026-09-25「未执行完就退出」治理）：清单有未 complete 项就禁止 DONE，
+      // 独立纠正计数（最多 2 次，用尽则放行——模型确实做不完时让它如实总结，不死锁）
+      const todoCheck = await todoHasIncomplete(root)
+      if (todoCheck && todoCorrectionCount < 2) {
+        todoCorrectionCount++
+        messages.push({ role: 'assistant', content: rawResponse })
+        messages.push({
+          role: 'user',
+          content: `⚠️ 纠正（第 ${todoCorrectionCount} 次）：你的任务清单还有 ${todoCheck.count} 项未完成，禁止宣布任务完成：
+
+${todoCheck.preview}
+
+请继续执行未完成项（逐项调用工具，每完成一项用 todo_write complete 标记）。全部打勾后才允许输出 DONE: 总结。`,
         })
         continue
       }
       // 纠正次数用尽仍带代码 → 兜底剥掉代码块，绝不把代码甩给用户
       // （早期版本这里直接 return doneSummary，代码会原样漏到对话里）
-      return hasUnsavedCodeBlock(response) ? stripCodeBlocks(response) : (doneSummary || '任务已完成')
+      return hasUnsavedCodeBlock(rawResponse) ? stripCodeBlocks(rawResponse) : (doneSummary || '任务已完成')
     }
 
     // 直接输出代码块而未调用工具 → 违规，纠正重试（绝不静默接受未保存的代码）
-    if (hasUnsavedCodeBlock(response) && correctionCount < MAX_CORRECTIONS) {
+    // 同样基于 rawResponse 检测，覆盖「代码藏在 <think> 思考区」的逃避手法
+    if (hasUnsavedCodeBlock(rawResponse) && correctionCount < MAX_CORRECTIONS) {
       correctionCount++
-      messages.push({ role: 'assistant', content: response })
+      messages.push({ role: 'assistant', content: rawResponse })
       messages.push({
         role: 'user',
         content: `⚠️ 纠正（第 ${correctionCount} 次）：你直接在回复中输出了代码，但没有调用工具保存文件。这违反了规则——所有代码/文件内容必须通过工具写入文件，直接输出代码等于没有完成任务。
@@ -1172,7 +1310,7 @@ ARGS: {"file_path": "文件名", "content": "完整代码内容"}
     // 只匹配「否认能力」的表述，不匹配「道歉」本身——否则「抱歉，文件不存在，我先创建它」会被误伤
     if (/(?:没有|不(?:具?备|拥有|存在))[^。\n]{0,12}(?:写入权限|文件权限|读写权限|权限|能力)|作为(?:一个)?(?:AI|人工智能|语言模型|助手)[，,]?[^。\n]{0,20}我(?:无法|不能|没有|只能)|我(?:无法|不能)(?:直接)?[^。\n]{0,16}(?:您的|你的)(?:电脑|计算机|系统)|我(?:无法|不能)(?:直接|真正|实际)?(?:创建|写入|修改|删除|执行|操作|访问)[^。\n]{0,10}(?:文件|电脑|您|你|系统|命令)|我(?:只能|仅能)(?:在|提供|给出|告诉)(?:对话|建议|文字|方案)/.test(response) && correctionCount < MAX_CORRECTIONS) {
       correctionCount++
-      messages.push({ role: 'assistant', content: response })
+      messages.push({ role: 'assistant', content: rawResponse })
       messages.push({
         role: 'user',
         content: `⚠️ 纠正（第 ${correctionCount} 次）：你的回复在否认自己的能力，这是错误的。
@@ -1192,7 +1330,7 @@ ARGS: {"file_path": "文件名", "content": "完整代码内容"}
     // 啰嗦反问检测（模仿坏模式）→ 纠正一次，要求直接执行或简短说明
     if (/我注意到您提到|请提供具体任务描述|请明确任务内容|没有明确说明要继续哪个任务/.test(response) && correctionCount < MAX_CORRECTIONS) {
       correctionCount++
-      messages.push({ role: 'assistant', content: response })
+      messages.push({ role: 'assistant', content: rawResponse })
       messages.push({
         role: 'user',
         content: `⚠️ 纠正（第 ${correctionCount} 次）：你的回复是开放式反问，禁止。你的任务在最前面的消息中已经给出。
@@ -1210,7 +1348,7 @@ ARGS: {"file_path": "文件名", "content": "完整代码内容"}
     // 直接结束任务。检测到计划语义 → 纠正继续，最多 2 次防死循环。
     if (planTalkCount < 2 && !/(?:已完成|全部完成|以上就是|总结如下|任务完成)/.test(response) && /(我先|让我先|我这就|我将|接下来(?:我)?|然后(?:动手|开始|写|创建|执行)|首先|第一步|马上|正在(?:读取|写入|创建|执行|分析)|开始(?:读取|写入|创建|执行|分析|动手))/.test(response)) {
       planTalkCount++
-      messages.push({ role: 'assistant', content: response })
+      messages.push({ role: 'assistant', content: rawResponse })
       messages.push({
         role: 'user',
         content: `⚠️ 你刚才只是在说明计划，任务还没有完成。请立即继续行动：调用下一个工具（TOOL: ... / ARGS: {...}）。全部完成后才输出 DONE: 总结。`,
@@ -1223,7 +1361,7 @@ ARGS: {"file_path": "文件名", "content": "完整代码内容"}
     // （弱模型会把内容写在思考里然后声称完成，文件其实一个都没建）
     if (!wroteAnyFile && writeIntentCount < 2 && isWriteIntentTask(taskDesc)) {
       writeIntentCount++
-      messages.push({ role: 'assistant', content: response })
+      messages.push({ role: 'assistant', content: rawResponse })
       messages.push({
         role: 'user',
         content: `⚠️ 你还没有创建或修改任何文件，任务尚未完成。内容停留在思考或回复里等于零。
@@ -1239,8 +1377,8 @@ ARGS: {"file_path": "文件名", "content": "完整内容"}
 
     // 纯文本最终回答（无代码块，或已达到纠正上限）
     // 兜底：即使纠正次数用尽、模型仍坚持贴代码，也不把代码甩给用户——
-    // 只保留结论文字（代码此时已经落在文件里了）
-    return hasUnsavedCodeBlock(response) ? stripCodeBlocks(response) : response
+    // 只保留结论文字（代码此时已经落在文件里了）。检测基于 rawResponse 覆盖思考区逃避。
+    return hasUnsavedCodeBlock(rawResponse) ? stripCodeBlocks(rawResponse) : response
   }
 
   return '(达到最大迭代次数，任务可能未完成)'

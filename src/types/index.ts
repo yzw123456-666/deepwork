@@ -70,8 +70,11 @@ export interface AppConfig {
   currentConversationId?: string
   language: 'zh' | 'en'
   theme: 'light' | 'dark' | 'system'
-  // 主题色（accent）：决定整体色相，界面所有位置（含原本的白色）都会被该色系晕染
+  // 主题色（accent）：决定整体色相，与壁纸叠加生效（2026-09-25 晚恢复）
   accent?: 'sky' | 'deepblue' | 'navy' | 'violet' | 'emerald' | 'teal' | 'lime' | 'rose' | 'amber'
+  // 应用壁纸（2026-09-25）：none=关闭；builtin=内置动态壁纸（value=id）；
+  // image/video/html=已导入 userData/wallpapers/ 的本地文件；url=网页地址
+  wallpaper?: WallpaperConfig
   sidebarCollapsed: boolean
   // 智能体设置
   agentSystemPrompt?: string
@@ -120,6 +123,20 @@ export interface AppConfig {
   netBlockedDomains?: string
   // AI 工具（图片/视频生成与理解）
   aiTools?: AIToolConfig[]
+  // 人格设置（2026-09-25，参考 WorkBuddy）：回复风格 / 自定义指令 / 称呼与身份 / 人设描述
+  replyStyle?: 'default' | 'professional' | 'friendly' | 'concise' | 'creative'
+  customInstructions?: string   // 自定义指令（≤1500 字，注入所有对话）
+  aiName?: string               // AI 的名字
+  userNickname?: string         // 对用户的称呼
+  personaPrompt?: string        // 人设 / 人格描述
+}
+
+// 应用壁纸配置（2026-09-25，参考 Wallpaper Engine：图片/视频/HTML/网址 + 内置动态壁纸）
+export interface WallpaperConfig {
+  type: 'none' | 'builtin' | 'image' | 'video' | 'html' | 'url'
+  value: string        // builtin=壁纸id；image/video/html=本地文件完整路径；url=网页地址
+  dim?: number         // 暗化遮罩强度 0~0.7（保证 UI 可读性），默认 0.35
+  blur?: number        // 侧栏毛玻璃模糊半径 px 0~30，默认 18
 }
 
 export interface Skill {
@@ -162,6 +179,8 @@ export interface Task {
   subtasks: SubTask[]          // 子任务清单
   execPermission?: 'default' | 'enabled' | 'disabled'  // 任务级命令执行权限：default 跟随安全中心
   thinkingDepth?: 'low' | 'high' | 'max'               // 思考深度：低/高/最高（默认高）
+  agentId?: string                                     // 新建任务时选用的 Agent 包（如 writing-master），对话时注入其专属人格
+  description?: string                                 // 任务描述（新建时可选填写，仅作任务备注，不自动发送）
   messagesMigrated?: boolean                            // 轮 K：旧任务消息已迁移为对话（独立任务界面已删除，历史在 AI 助理对话页查看）
 }
 

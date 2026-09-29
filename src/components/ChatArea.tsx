@@ -36,7 +36,8 @@ import { useAppStore } from '../stores'
 import { Message, Model, MessageAttachment, ToolDetail } from '../types'
 import AppLogo from './AppLogo'
 import { buildMemoryBlock, autoSummarizeMemory } from '../services/memory'
-import { sanitizeThinkingDisplay } from '../services/codeFold'
+import { parseThinkingUnits, type ThinkingUnit } from '../services/codeFold'
+import { buildPersonaBlock } from '../services/persona'
 import { v4 as uuidv4 } from 'uuid'
 import AddModelDialog from './AddModelDialog'
 import { MediaPreview, ImageThumb, VideoThumb, PreviewableAttachment } from './MediaPreview'
@@ -135,15 +136,13 @@ function dropCodeBlocks(content: string, writtenFiles: string[] = []): string {
 }
 
 /**
- * 思考区（ThinkingBlock 显示层）的代码清洗：思考区落盘保留原文（不影响完整推理），
- * 但**显示**时代码块一律替换为一行「📄 代码草稿（未写入文件）」——用户不想在对话里看到代码墙，
- * 无论是正文还是思考区的代码草稿（2026-09-22 用户视频演示期望效果）。
- * 轮 J：委托共享模块 codeFold（围栏 + HTML 文档 + 无围栏裸代码三合一），
- * 与任务视图（TaskWorkspace）共用同一份实现，避免两份逻辑漂移。
+ * 思考区（ThinkingBlock 显示层）：2026-09-24 起改为单元化渲染——
+ * parseThinkingUnits 把思考内容解析成 text / code 单元，code 单元（代码草稿）
+ * 渲染为可展开的 CodeDraftBlock：默认折叠成一行「📄 代码草稿（未写入文件）」，
+ * 点击展开看草稿原文（用户要求「代码草稿也可以展开看看草稿内容是什么」）。
+ * 折叠边界与 codeFold.sanitizeThinkingDisplay 同一套规则，只是不再丢内容；
+ * 落盘仍保留思考原文（polishMessageContent 已保证）。
  */
-function replaceCodeBlocksWithEdit(content: string): string {
-  return sanitizeThinkingDisplay(content)
-}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -205,16 +204,48 @@ const MessageMedia: React.FC<{ att: MessageAttachment; onOpen: () => void }> = (
   )
 }
 
+// 思考区里的代码草稿块：默认折叠成一行「📄 代码草稿（未写入文件）」，点击展开看草稿原文
+// （2026-09-24 用户要求「代码草稿也可以展开看看草稿内容是什么」——占位不再吞掉内容）
+const CodeDraftBlock: React.FC<{ code: string }> = ({ code }) => {
+  const [open, setOpen] = useState(false)
+  // 展示时剥掉围栏标注行（```js / ```）与块前空行；裸代码、HTML 文档原样展示
+  const shown = useMemo(() => {
+    let s = code.replace(/^[ \t]*\n/, '')
+    s = s.replace(/^```[^\n]*\n?/, '')
+    s = s.replace(/\n?```[ \t]*$/, '')
+    return s
+  }, [code])
+  const lineCount = useMemo(() => shown.split('\n').length, [shown])
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-700 transition-colors"
+      >
+        <span>{CODE_NOTE}</span>
+        <span className="text-gray-400">· {lineCount} 行</span>
+        <ChevronRight size={12} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <pre className="mt-1 max-h-72 overflow-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-xs leading-relaxed text-gray-600 whitespace-pre-wrap break-words">
+          {shown}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 // 思考过程组件
 // 2026-09-23 用户视频结构：工具行（已读取/编辑/运行命令…）**嵌在深度思考区内**，
 // 与思考内容按时间顺序交错混排（思考段 → 触发它的工具行 → 下一段思考），
 // 不是消息底部的独立行。tools 为该 assistant 消息之后紧随的 system 工具行。
+// 2026-09-24：显示层单元化——parseThinkingUnits 解析 text/code 单元，
+// code 单元渲染为可展开的 CodeDraftBlock（默认仍只显示占位行，点击展开看草稿原文）。
 const ThinkingBlock: React.FC<{ content: string; isGenerating: boolean; tools?: Message[] }> = ({ content, isGenerating, tools = [] }) => {
   const [expanded, setExpanded] = useState(isGenerating)
   const { t } = useTranslation()
-  // 显示层清洗：思考区落盘保留原文，但展示时代码块一律替换为一行「📄 代码草稿（未写入文件）」
-  // （用户不想看到思考过程中的代码草稿墙，2026-09-22 明确要求）
-  const display = useMemo(() => replaceCodeBlocksWithEdit(content), [content])
+  // 思考内容 → 文本/代码草稿单元（折叠边界与 sanitizeThinkingDisplay 同一套规则，只是不再丢内容）
+  const units = useMemo(() => parseThinkingUnits(content), [content])
 
   useEffect(() => {
     if (!isGenerating && expanded) {
@@ -223,8 +254,23 @@ const ThinkingBlock: React.FC<{ content: string; isGenerating: boolean; tools?: 
     }
   }, [isGenerating])
 
-  // 思考分段：工具调用前 onStatus 会插入空行封段——段边界正好对应工具行位置
-  const segments = useMemo(() => display.split(/\n{2,}/).map(s => s.trim()).filter(Boolean), [display])
+  // 思考分段：文本按空行切段（工具调用前 onStatus 会插入空行封段——段边界正好对应工具行位置），
+  // 代码草稿单元挂在当前段内（前后贴着思考文字时与文字同段，独占空行时自成一段）
+  const segments = useMemo(() => {
+    const gs: Array<Array<ThinkingUnit>> = [[]]
+    for (const u of units) {
+      if (u.kind === 'text') {
+        u.text.split(/\n{2,}/).forEach((part, i) => {
+          if (i > 0) gs.push([])
+          const trimmed = part.trim()
+          if (trimmed) gs[gs.length - 1].push({ kind: 'text', text: trimmed })
+        })
+      } else {
+        gs[gs.length - 1].push(u)
+      }
+    }
+    return gs.filter(g => g.length > 0)
+  }, [units])
 
   if (!content) return null
 
@@ -247,16 +293,20 @@ const ThinkingBlock: React.FC<{ content: string; isGenerating: boolean; tools?: 
         <div className="mt-1">
           {segments.map((seg, si) => (
             <div key={si}>
-              {seg.split('\n').map((line, i) => (
-                <p key={i} className="text-sm text-gray-700 leading-relaxed mb-1">{line || '\u00A0'}</p>
-              ))}
+              {seg.map((u, ui) =>
+                u.kind === 'text'
+                  ? u.text.split('\n').map((line, i) => (
+                      <p key={`${ui}-${i}`} className="text-sm text-gray-700 leading-relaxed mb-1">{line || '\u00A0'}</p>
+                    ))
+                  : <CodeDraftBlock key={ui} code={u.code} />
+              )}
               {/* 工具行紧跟触发它的思考段（视频结构：工具行在深度思考区内） */}
               {tools[si] && <ToolActionLine content={tools[si].content || ''} detail={tools[si].toolDetail} />}
             </div>
           ))}
           {/* 工具行多于思考段时（如最后一次工具调用后思考未再续）全部追加在末尾 */}
-          {tools.slice(segments.length).map(t => (
-            <ToolActionLine key={t.id} content={t.content || ''} detail={t.toolDetail} />
+          {tools.slice(segments.length).map(tool => (
+            <ToolActionLine key={tool.id} content={tool.content || ''} detail={tool.toolDetail} />
           ))}
         </div>
       )}
@@ -364,8 +414,8 @@ function joinWorkPath(workDir: string, p: string): string {
 }
 
 /**
- * 工具调用的「完成式」文案（2026-09-23 严格按照用户视频格式）：
- * 无冒号、空格分隔——「编辑 <完整路径>」「已读取 <路径>」「已搜索 <路径> <关键词>」，
+ * 工具调用的完成文案（2026-09-23 对齐 WorkBuddy 视频）：
+ * 无冒号、空格分隔——「编辑 <完整路径>」「读取 <路径>」「搜索 <路径> <关键词>」，
  * 路径完整显示（行超宽时截断、悬停可见全文）。
  */
 function describeToolDone(tool: string, args: Record<string, any>, workDir = ''): string {
@@ -375,14 +425,14 @@ function describeToolDone(tool: string, args: Record<string, any>, workDir = '')
     case 'write_file': return `写入 ${p}`
     case 'append_file': return `追加 ${p}`
     case 'edit_file': return `编辑 ${p}`
-    case 'read_file': return `已读取 ${p}`
+    case 'read_file': return `读取 ${p}`
     case 'list_files': return `浏览目录 ${p}`.trim()
-    case 'find_files': return `已查找 ${p}`.trim()
-    case 'search_files': return `已搜索 ${p} ${String(args?.pattern ?? '')}`.trim()
+    case 'find_files': return `查找 ${p}`.trim()
+    case 'search_files': return `搜索 ${p} ${String(args?.pattern ?? '')}`.trim()
     case 'run_command': return `运行命令`
-    case 'web_search': return `已搜索 ${String(args?.query ?? '').trim()}`.trim()
+    case 'web_search': return `搜索 ${String(args?.query ?? '').trim()}`.trim()
     case 'web_fetch': return `抓取网页 ${p}`
-    default: return `已处理${p ? ' ' + p : ''}`
+    default: return `处理${p ? ' ' + p : ''}`
   }
 }
 
@@ -655,6 +705,9 @@ const ChatArea: React.FC = () => {
   // 停止原因：abort 后底层 fetch 可能抛内部包装错误（如「BodyStreamBuffer was aborted」），
   // 丢失我们设置的原因——触发 abort 前先在这里记下人类可读的原因，catch 里优先使用
   const stallReasonRef = useRef('')
+  // Agent 工具执行中（如 run_command/pyinstaller 可能跑几分钟）： stall 检测应暂停，
+  // 因为工具执行期间模型不流式输出数据，否则会误把正常的长工具运行掐断。
+  const toolInProgressRef = useRef(false)
   // 工具模式下：本轮的思考过程 + 已落盘的文件（用于最终消息的折叠提示）
   const fullThinkingRef = useRef('')
   const writtenFilesRef = useRef<string[]>([])
@@ -1066,6 +1119,9 @@ const ChatArea: React.FC = () => {
         }
 
         const onToolUse = async (tool: string, args: Record<string, any>, result: { ok: boolean; output?: string; notice?: string }) => {
+          // 工具执行完毕，恢复无数据超时检测；本轮仍在继续，模型接下来还会输出
+          toolInProgressRef.current = false
+          armStallTimer(controller, stallSeconds)
           const doneTitle = describeToolDone(tool, args, workDir)
           if (result.ok) writtenFiles.push(String(args?.file_path ?? args?.path ?? ''))
           const content = result.ok
@@ -1092,6 +1148,14 @@ const ChatArea: React.FC = () => {
         }
 
         const onStatus = async (status: string, toolCall?: { tool: string; args: Record<string, any> }) => {
+          // 结构化 toolCall：工具即将执行，暂停 stall 检测（长命令/联网可能被误掐断）
+          if (toolCall) {
+            toolInProgressRef.current = true
+            if (stallTimerRef.current) { clearTimeout(stallTimerRef.current); stallTimerRef.current = null }
+          } else {
+            // 普通状态更新（如「正在调用模型」）说明 Agent 还活着，重置 stall 计时
+            armStallTimer(controller, stallSeconds)
+          }
           // 结构化 toolCall：upsert 固定 id 的「进行中」工具动作行（两行样式）
           if (toolCall) {
             // 工具动作打断思考流：先把当前思考段封段（空行分隔），下一段思考从新行开始，
@@ -1127,6 +1191,8 @@ const ChatArea: React.FC = () => {
             // 只显示一两个字的根因（"now"/"do"/"(i" 全是最后一个 reasoning 分片）
             onThinking: (delta) => {
               if (!delta) return
+              // 思考流持续产出，说明模型没有卡死：重置 stall 计时（工具执行期间 onThinking 不会触发）
+              if (!toolInProgressRef.current) armStallTimer(controller, stallSeconds)
               fullThinkingRef.current += delta
               // 节流：每个分片都 updateMessage 会触发全量对话写盘，300ms 批量刷新
               const now = Date.now()
@@ -1145,7 +1211,25 @@ const ChatArea: React.FC = () => {
             .map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }))
             .filter(m => m.content.trim()),
           controller.signal,
-          { thinkingDepth: (config as any).chatThinkingDepth ?? 'high' }
+          {
+            thinkingDepth: (config as any).chatThinkingDepth ?? 'high',
+            persona: await (async () => {
+              // 人格块 = 基础人格设置 + 任务所选 Agent 包的专属人格（新建任务时可选）
+              let personaBlock = buildPersonaBlock(config)
+              try {
+                const boundTask = conversation.taskId
+                  ? useAppStore.getState().tasks.find(t => t.id === conversation.taskId)
+                  : null
+                if (boundTask?.agentId) {
+                  const ar = await window.electronAPI?.agents?.get?.(boundTask.agentId)
+                  if (ar?.ok && ar.agent?.agentPrompt) {
+                    personaBlock = personaBlock ? `${personaBlock}\n\n${ar.agent.agentPrompt}` : ar.agent.agentPrompt
+                  }
+                }
+              } catch { /* Agent 人格获取失败不阻断对话 */ }
+              return personaBlock
+            })(),
+          }
         )
 
         const finalText = polishAssistantText(rawResult, writtenFiles.filter(Boolean))
@@ -1168,7 +1252,7 @@ const ChatArea: React.FC = () => {
       }
 
       const systemPrompt = ((config as any).agentSystemPrompt as string | undefined)?.trim() || DEFAULT_CHAT_PROMPT
-      allMessages = [{ role: 'system', content: `${systemPrompt}${memoryBlock}` }, ...allMessages]
+      allMessages = [{ role: 'system', content: `${systemPrompt}${memoryBlock}${buildPersonaBlock(config)}` }, ...allMessages]
 
       const useStreaming = (config as any).agentStreaming ?? true
 
@@ -1345,6 +1429,7 @@ const ChatArea: React.FC = () => {
         stallTimerRef.current = null
       }
       stallReasonRef.current = ''
+      toolInProgressRef.current = false
       setIsGenerating(false)
       setStreamingMsgId(null)
       abortControllerRef.current = null
@@ -1416,7 +1501,7 @@ const ChatArea: React.FC = () => {
 
   return (
     <>
-    <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
+    <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden app-content-root">
       {messages.length === 0 ? (
         /* Welcome Screen */
         <div className="flex-1 flex flex-col items-center justify-center p-8">

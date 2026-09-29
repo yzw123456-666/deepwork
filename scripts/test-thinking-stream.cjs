@@ -67,7 +67,7 @@ const chunks1 = [
 global.fetch = async () => sseResponse(chunks1)
 
 const deltas1 = []
-const returned1 = await engine.callModel(model, [{ role: 'user', content: '分析网站' }], 0.4, undefined, (t) => deltas1.push(t))
+const { content: returned1 } = await engine.callModel(model, [{ role: 'user', content: '分析网站' }], 0.4, undefined, (t) => deltas1.push(t))
 const fullThink = thinkParts.join('')
 
 ok('onThinking 回调次数 = 分片数', deltas1.length === thinkParts.length, `实际 ${deltas1.length} 次`)
@@ -95,7 +95,7 @@ console.log('\n===== 3. content 内 <think> 整块：整块兼容增量语义 ==
 const chunks3 = [{ choices: [{ delta: { content: '<think>思考A：先看结构</think>正文B' } }] }]
 global.fetch = async () => sseResponse(chunks3)
 const deltas3 = []
-const returned3 = await engine.callModel(model, [{ role: 'user', content: 'x' }], 0.4, undefined, (t) => deltas3.push(t))
+const { content: returned3 } = await engine.callModel(model, [{ role: 'user', content: 'x' }], 0.4, undefined, (t) => deltas3.push(t))
 ok('<think> 整块被提取回调', deltas3.length === 1 && deltas3[0] === '思考A：先看结构', JSON.stringify(deltas3))
 let buf3 = ''
 deltas3.forEach(t => { buf3 += t })
@@ -110,7 +110,7 @@ global.fetch = async () => ({
   text: async () => '',
 })
 const deltas4 = []
-const returned4 = await engine.callModel(model, [{ role: 'user', content: 'x' }], 0.4, undefined, (t) => deltas4.push(t))
+const { content: returned4 } = await engine.callModel(model, [{ role: 'user', content: 'x' }], 0.4, undefined, (t) => deltas4.push(t))
 ok('非流式整块回调', deltas4.length === 1 && deltas4[0] === '思考C：整体思路', JSON.stringify(deltas4))
 let buf4 = ''
 deltas4.forEach(t => { buf4 += t })
@@ -146,14 +146,20 @@ if (body) {
     const conv = { id: 'c1', messages: [msg] }
     const updateCalls = []
     const fullThinkingRef = { current: '' }
-    const factory = new Function('fullThinkingRef', 'conversation', 'assistantMessage', 'updateMessage', 'useAppStore', `
+    // v26.9.47 stall 修复后 onThinking 体内引用了这些闭包变量，mock 需提供桩
+    const toolInProgressRef = { current: false }
+    const armStallTimer = () => {}
+    const controller = { signal: { aborted: false } }
+    const stallSeconds = 300
+    const factory = new Function('fullThinkingRef', 'conversation', 'assistantMessage', 'updateMessage', 'useAppStore', 'toolInProgressRef', 'armStallTimer', 'controller', 'stallSeconds', `
       let lastThinkFlush = 0
       return (delta) => { ${jsBody} }
     `)
     const onThinking = factory(
       fullThinkingRef, conv, msg,
       (cid, mid, content) => updateCalls.push({ cid, mid, content }),
-      { getState: () => ({ conversations: [conv] }) }
+      { getState: () => ({ conversations: [conv] }) },
+      toolInProgressRef, armStallTimer, controller, stallSeconds
     )
     return { onThinking, updateCalls, fullThinkingRef, msg, conv }
   }

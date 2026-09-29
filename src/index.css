@@ -116,6 +116,12 @@ body {
 }
 
 /* Animation */
+:root {
+  /* 全局丝滑缓动（2026-09-29）：只动 transform/opacity 走 GPU 合成，不触发重排 */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -134,10 +140,51 @@ body {
   animation: slideIn 0.2s ease-out;
 }
 
+/* ---- 页面切换过渡：淡入 + 轻微上移，换页时整体入场 ---- */
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-page-in {
+  animation: pageIn 0.24s var(--ease-smooth) both;
+}
+
+/* ---- 卡片/条目入场（配合 style={{ animationDelay }} 做 stagger）---- */
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-rise-in {
+  animation: riseIn 0.32s var(--ease-smooth) both;
+  will-change: transform, opacity;
+}
+
+/* ---- 模态弹层：淡入 + 微缩放（比纯 fade 更有"浮起"感）---- */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-pop-in {
+  animation: popIn 0.22s var(--ease-smooth) both;
+}
+
+/* 无障碍：系统开启"减少动态效果"时禁用所有入场动画 */
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-in,
+  .animate-rise-in,
+  .animate-pop-in,
+  .animate-fade-in,
+  .animate-slide-in {
+    animation: none !important;
+  }
+}
+
 /* ================= 主题系统 =================
-   设计原则：主题色（--h）决定整体色相，明度决定深浅，饱和度决定「白底」被染多少色。
-   因此切换主题色时，连原本纯白的卡片、输入框、侧边栏都会带上该色系的淡淡色调，
-   而不只是按钮变颜色。
+   主题色（--h）决定整体色相，明度决定深浅，--cs 控制底色染色饱和度；
+   主题色选项与壁纸叠加生效（2026-09-25 晚恢复）。
 
    --h   色相（0-360）、--s 饱和度、--cs 「白底」染色饱和度（比主色低，保证可读性）
    --n   中性色相（跟随主题色，让灰阶也带一点色温） */
@@ -155,7 +202,8 @@ body {
 [data-accent="amber"]    { --h: 24;  --cs: 34%; --n: 32;  }
 [data-accent="lime"]     { --h: 88;  --cs: 30%; --n: 96;  }
 
-/* 强调色（按钮、高亮、链接、开关）——饱和度拉满 */
+/* 强调色（按钮、高亮、链接、开关）——饱和度拉满
+   （主题色选项于 2026-09-25 晚恢复，与壁纸叠加生效） */
 :root,
 [data-accent] {
   --p-50:  hsl(var(--h) 70% 97.5%);
@@ -307,3 +355,54 @@ select option { background-color: var(--c-0); color: var(--c-900); }
 [data-theme="dark"] .bg-primary-50 { background-color: var(--p-50) !important; }
 [data-theme="dark"] .text-primary-600 { color: var(--p-300) !important; }
 [data-theme="dark"] .bg-primary-100 { background-color: var(--p-100) !important; }
+
+/* ---------- 应用壁纸（2026-09-25，参考 Wallpaper Engine） ----------
+   html[data-wallpaper] 激活：根/内容区透出壁纸层，侧栏毛玻璃，
+   气泡/卡片/弹层保持实底。--wp-blur 由 App.tsx 按设置写入。 */
+@keyframes wp-hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
+@keyframes wp-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes wp-drift {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(7%, -5%) scale(1.14); }
+  66% { transform: translate(-6%, 6%) scale(.92); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes wp-drift2 {
+  0% { transform: translate(0, 0) scale(1); }
+  40% { transform: translate(-8%, 6%) scale(1.12); }
+  75% { transform: translate(6%, -4%) scale(.94); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes wp-wave { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes wp-grid { from { background-position: 0 0, 0 0; } to { background-position: 0 44px, 0 0; } }
+
+html[data-wallpaper="1"] .app-root-bg { background: transparent !important; }
+
+/* 玻璃模式（data-wp-glass="1"，模糊滑条 > 0）：标题栏/侧栏/内容区统一毛玻璃，
+   强度由 --wp-blur 统一控制；弹窗（fixed z-50 遮罩+实底面板）不在骨架内，不受影响 */
+html[data-wallpaper="1"][data-wp-glass="1"] .app-titlebar-root {
+  background: rgba(255, 255, 255, .5) !important;
+  border-bottom-color: rgba(128, 128, 128, .22) !important;
+  backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+}
+html[data-wallpaper="1"][data-wp-glass="1"] .app-sidebar-root {
+  background: rgba(255, 255, 255, .55) !important;
+  backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+}
+html[data-wallpaper="1"][data-wp-glass="1"] .app-content-root {
+  background: rgba(255, 255, 255, .45) !important;
+  backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--wp-blur, 18px)) saturate(1.35);
+}
+[data-theme="dark"][data-wallpaper="1"][data-wp-glass="1"] .app-titlebar-root { background: rgba(22, 25, 33, .5) !important; }
+[data-theme="dark"][data-wallpaper="1"][data-wp-glass="1"] .app-sidebar-root { background: rgba(22, 25, 33, .55) !important; }
+[data-theme="dark"][data-wallpaper="1"][data-wp-glass="1"] .app-content-root { background: rgba(22, 25, 33, .45) !important; }
+
+/* 无玻璃（模糊 = 0）：骨架全部直接透壁纸，只留暗化遮罩护可读性 */
+html[data-wallpaper="1"] .app-titlebar-root,
+html[data-wallpaper="1"] .app-sidebar-root,
+html[data-wallpaper="1"] .app-content-root { background: transparent !important; }
+/* accent 染色规则在前面用 !important 染 .bg-white——这里按特异性压回透明（html 前缀已更高） */
+html[data-wallpaper="1"] .app-sidebar-root.bg-white { background: transparent !important; }
