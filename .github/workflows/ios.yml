@@ -1,0 +1,47 @@
+name: iOS 模拟器构建测试
+on:
+  workflow_dispatch:
+
+jobs:
+  simulator-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 编译（iOS 模拟器）
+        run: |
+          cd ios
+          xcodebuild -project deepworkremoteios.xcodeproj \
+            -target deepworkremoteios \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tail -40
+
+      - name: 启动模拟器、安装并运行
+        run: |
+          xcrun simctl list devices available | head -25
+          SIM=$(xcrun simctl list devices available | grep -oE "iPhone [0-9]+" | head -1)
+          echo "使用模拟器: $SIM"
+          xcrun simctl boot "$SIM"
+          xcrun simctl bootstatus "$SIM" -b
+          APP=$(find ios/build/Build/Products -name "deepworkremoteios.app" -path "*iphonesimulator*" | head -1)
+          echo "APP 路径: $APP"
+          xcrun simctl install "$SIM" "$APP"
+          xcrun simctl launch "$SIM" com.deepwork.remote.ios
+
+      - name: 截图
+        run: |
+          sleep 8
+          SIM=$(xcrun simctl list devices booted | grep -oE "[0-9A-F-]{36}" | head -1)
+          xcrun simctl io "$SIM" screenshot shot-main.png
+          # 检查进程还活着（启动后没有崩溃）
+          xcrun simctl spawn "$SIM" launchctl list | grep deepwork || echo "进程已退出（可能崩溃）"
+
+      - name: 上传截图
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-shots
+          path: shot-*.png
+          if-no-files-found: error
