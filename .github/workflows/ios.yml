@@ -10,12 +10,13 @@ jobs:
 
       - name: 编译（iOS 模拟器）
         run: |
+          set -o pipefail
           cd ios
           xcodebuild -project deepworkremoteios.xcodeproj \
             -target deepworkremoteios \
             -configuration Debug \
             -sdk iphonesimulator \
-            -derivedDataPath build \
+            -symroot build/Sym \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tail -40
 
@@ -26,8 +27,9 @@ jobs:
           echo "使用模拟器: $SIM"
           xcrun simctl boot "$SIM"
           xcrun simctl bootstatus "$SIM" -b
-          APP=$(find ios/build/Build/Products -name "deepworkremoteios.app" -path "*iphonesimulator*" | head -1)
+          APP=$(find ios/build/Sym/Build/Products -name "deepworkremoteios.app" -path "*iphonesimulator*" | head -1)
           echo "APP 路径: $APP"
+          test -n "$APP"
           xcrun simctl install "$SIM" "$APP"
           xcrun simctl launch "$SIM" com.deepwork.remote.ios
 
