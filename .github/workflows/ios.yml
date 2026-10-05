@@ -18,7 +18,26 @@ jobs:
             -sdk iphonesimulator \
             -symroot build/Sym \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -40
+            build 2>&1 | tee build.log | tail -40
+
+      - name: 提取编译错误
+        if: failure()
+        run: |
+          if [ -f ios/build.log ]; then
+            grep -E " error: " ios/build.log > compile-errors.txt || true
+            echo "==== 日志尾部 ====" >> compile-errors.txt
+            tail -50 ios/build.log >> compile-errors.txt
+          else
+            echo "build.log 不存在" > compile-errors.txt
+          fi
+
+      - name: 上传编译错误
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-errors
+          path: compile-errors.txt
+          if-no-files-found: error
 
       - name: 启动模拟器、安装并运行
         run: |
